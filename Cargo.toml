@@ -17,4 +17,4 @@ log = "0.4.22"
 strum = "0.26"
 strum_macros = "0.27"
 utoipa = { version = "4.2.0", features = ["actix_extras", "preserve_order", "preserve_path_order"] }
-utoipa-swagger-ui = { version = "6.0.0", features = ["actix-web"] }
+utoipa-swagger-ui = { version = "9.0.1", features = ["actix-web"] }
