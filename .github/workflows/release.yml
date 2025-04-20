@@ -67,7 +67,7 @@ jobs:
           fi
 
       - name: Upload asset to release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: ${{ matrix.asset_name }}
         env:
@@ -91,7 +91,7 @@ jobs:
           cat CHANGELOG.md
           
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           name: Release ${{ github.ref_name }}
           body_path: CHANGELOG.md
