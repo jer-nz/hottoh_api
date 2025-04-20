@@ -20,3 +20,19 @@ source:
 config:
   - 'config.ini'
   - 'Cargo.toml'
+
+# Label for dependency updates
+dependencies:
+  - 'Cargo.toml'
+  - 'Cargo.lock'
+
+# Label for Rust-related changes
+rust:
+  - 'src/**/*.rs'
+  - 'Cargo.toml'
+  - 'Cargo.lock'
+  - '.rustfmt.toml'
+
+# Label for GitHub Actions-related changes
+github-actions:
+  - '.github/workflows/**/*'
