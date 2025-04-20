@@ -1,0 +1,22 @@
+# Configuration for GitHub Actions Labeler
+# Automatically adds labels to PRs based on modified files
+
+# Label for documentation changes
+documentation:
+  - README.md
+  - LICENSE
+  - '**/*.md'
+
+# Label for CI/CD changes
+ci:
+  - '.github/**/*'
+  - '.rustfmt.toml'
+
+# Label for source code changes
+source:
+  - 'src/**/*'
+
+# Label for configuration changes
+config:
+  - 'config.ini'
+  - 'Cargo.toml'
