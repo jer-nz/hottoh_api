@@ -14,7 +14,7 @@ ctrlc = "3.4"
 flexi_logger = "0.29.4"
 config = "0.15"
 log = "0.4.22"
-strum = "0.26"
+strum = "0.27"
 strum_macros = "0.27"
 utoipa = { version = "4.2.0", features = ["actix_extras", "preserve_order", "preserve_path_order"] }
 utoipa-swagger-ui = { version = "6.0.0", features = ["actix-web"] }
