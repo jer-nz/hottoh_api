@@ -1,13 +1,13 @@
 # Hottoh API
 
-[![Rust CI](https://github.com/yourusername/hottoh_api/actions/workflows/ci.yml/badge.svg)](https://github.com/yourusername/hottoh_api/actions/workflows/ci.yml)
-[![Release](https://github.com/yourusername/hottoh_api/actions/workflows/release.yml/badge.svg)](https://github.com/yourusername/hottoh_api/actions/workflows/release.yml)
+[![Rust CI](https://github.com/jer-nz/hottoh_api/actions/workflows/ci.yml/badge.svg)](https://github.com/jer-nz/hottoh_api/actions/workflows/ci.yml)
+[![Release](https://github.com/jer-nz/hottoh_api/actions/workflows/release.yml/badge.svg)](https://github.com/jer-nz/hottoh_api/actions/workflows/release.yml)
 
-A Rust application for controlling stoves via TCP communication with an HTTP API interface.
+A Rust application for controlling Hottoh stoves via an HTTP API interface.
 
 ## Project Overview
 
-Hottoh API is a bridge application that connects to stoves (heating devices) via TCP protocol and exposes their functionality through a RESTful HTTP API. This allows for remote control and monitoring of compatible stoves from any device that can make HTTP requests.
+Hottoh API is a bridge application that connects to pellet stoves via Hottoh proprietary TCP protocol and exposes their functionality through a RESTful HTTP API. This allows for remote control and monitoring of compatible stoves from any device that can make HTTP requests.
 
 ### Key Features
 
@@ -17,19 +17,20 @@ Hottoh API is a bridge application that connects to stoves (heating devices) via
 - Control of stove functions (power, temperature, fan speed, etc.)
 - Configurable logging system
 - Robust error handling and recovery
+- Very low CPU and memory usage
 
 ## Getting Started
 
 ### Prerequisites
 
 - Rust (edition 2021)
-- Compatible stove with TCP connectivity
+- Compatible Hottoh stove (default TCP port is 5001)
 
 ### Installation
 
 1. Clone the repository:
    ```
-   git clone https://github.com/yourusername/hottoh_api.git
+   git clone https://github.com/jer-nz/hottoh_api.git
    cd hottoh_api
    ```
 
@@ -42,7 +43,7 @@ Hottoh API is a bridge application that connects to stoves (heating devices) via
    ```ini
    [stove]
    ip = 192.168.1.100  # Replace with your stove's IP address
-   port = 8080         # Replace with your stove's port
+   port = 5001         # Replace with your stove's port
 
    [http_api]
    ip = 0.0.0.0        # Listen on all interfaces
@@ -58,6 +59,11 @@ Hottoh API is a bridge application that connects to stoves (heating devices) via
    ```
    ./target/release/hottoh_api config.ini
    ```
+   or
+   ```
+   ./target/release/hottoh_api 
+   ``` 
+   If the config.ini is in the same folder.
 
 ## API Documentation
 
@@ -68,13 +74,22 @@ http://localhost:3000/swagger-ui/
 
 This provides interactive documentation for all available API endpoints.
 
-### Example API Endpoints
+### API Endpoints
 
+#### GET Endpoints
 - `GET /api/inf` - Get general information about the stove
 - `GET /api/dat/0` - Get detailed stove data (page 0)
+- `GET /api/dat/1` - Get detailed stove data (page 1)
+- `GET /api/dat/2` - Get detailed stove data (page 2)
+
+#### POST Endpoints
 - `POST /api/dat/set_on_off` - Turn the stove on or off
-- `POST /api/dat/set_power_level` - Set the power level
+- `POST /api/dat/set_eco_mode` - Activate or deactivate eco mode
+- `POST /api/dat/set_power_level` - Set the power level (0-10)
 - `POST /api/dat/set_ambiance_temp` - Set the ambient temperature
+- `POST /api/dat/set_chrono_mode` - Activate or deactivate chrono mode
+- `POST /api/dat/set_chrono_temp` - Set the chrono temperature
+- `POST /api/dat/set_fan_speed` - Set the fan speed (0-5)
 
 ## Project Structure
 
@@ -89,46 +104,10 @@ This provides interactive documentation for all available API endpoints.
   - `hottoh_structs.rs` - Data structures for stove data
   - `shared_struct.rs` - Shared state between components
 
-## CI/CD
-
-Ce projet utilise GitHub Actions pour l'intégration continue et le déploiement continu :
-
-### Workflows CI
-
-- **Rust CI** (`ci.yml`) : Exécuté à chaque push et pull request sur la branche main
-  - Vérifie la compilation du code sur toutes les plateformes (Linux, Windows, macOS)
-  - Exécute les tests unitaires
-  - Vérifie le formatage du code avec rustfmt
-  - Analyse le code avec clippy pour détecter les problèmes potentiels
-
-### Workflows de Release
-
-- **Release** (`release.yml`) : Exécuté lorsqu'un tag est poussé (format `v*`)
-  - Compile des binaires pour plusieurs plateformes :
-    - Linux (x86_64, aarch64)
-    - Windows (x86_64)
-    - macOS (x86_64, aarch64)
-  - Crée une release GitHub avec les binaires compilés
-  - Génère un changelog basé sur les commits
-
 ## Contributing
 
-Contributions are welcome! Here are some guidelines:
-
-1. **Code Style**: Follow Rust's official style guidelines. Le projet utilise rustfmt avec la configuration dans `.rustfmt.toml`.
-2. **Documentation**: Add documentation comments (///) to all public items.
-3. **Error Handling**: Use proper error handling instead of `unwrap()` or `expect()`.
-4. **Testing**: Add tests for new functionality.
-5. **CI Checks**: Ensure all CI checks pass before submitting your PR.
-6. **Pull Requests**: Submit PRs with clear descriptions of changes.
-
-Tous les pull requests sont automatiquement vérifiés par notre CI pour s'assurer que le code compile sur toutes les plateformes cibles et respecte nos standards de qualité.
+Contributions are welcome!
 
 ## License
 
 [MIT License](LICENSE)
-
-## Acknowledgments
-
-- Thanks to all contributors who have helped with this project.
-- Special thanks to the Rust community for their excellent documentation and tools.
