@@ -3,11 +3,13 @@
 [![Rust CI](https://github.com/jer-nz/hottoh_api/actions/workflows/ci.yml/badge.svg)](https://github.com/jer-nz/hottoh_api/actions/workflows/ci.yml)
 [![Release](https://github.com/jer-nz/hottoh_api/actions/workflows/release.yml/badge.svg)](https://github.com/jer-nz/hottoh_api/actions/workflows/release.yml)
 
-A Rust application for controlling Hottoh stoves via an HTTP API interface.
+A Rust application for controlling Hottoh stoves (CMG, Edilkamin and more) via an HTTP API interface.
 
 ## Project Overview
 
 Hottoh API is a bridge application that connects to pellet stoves via Hottoh proprietary TCP protocol and exposes their functionality through a RESTful HTTP API. This allows for remote control and monitoring of compatible stoves from any device that can make HTTP requests.
+
+This project is based on the work done by benlbrm on the [hottohpy](https://github.com/benlbrm/hottohpy) project. Special thanks to him for his work.
 
 ### Key Features
 
