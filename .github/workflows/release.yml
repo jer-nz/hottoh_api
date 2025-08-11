@@ -38,7 +38,7 @@ jobs:
             asset_name: hottoh_api-macos-arm64
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       
       - name: Install Rust
         uses: actions-rs/toolchain@v1
@@ -82,7 +82,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: build-and-upload
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       
       - name: Generate changelog
         id: changelog
