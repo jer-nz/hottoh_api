@@ -1,68 +1,59 @@
-use crate::hottoh::hottoh_const::Command::Dat;
+//! Frame encoding and decoding for the HottoH local TCP protocol.
+//!
+//! Frame layout (firmware format `#%05d%4s%04X%3s%1s%s%04X\n`):
+//!
+//! ```text
+//! #<req id, 5 digits><desc, 4 chars><params length, 4 hex><CMD><R|W|E><params;...;><CRC, 4 hex>\n
+//! ```
+//!
+//! The CRC covers everything between `#` and the CRC itself. The firmware rejects a frame whose
+//! size is not `params length + 23` and answers nothing to invalid frames.
+
 use crate::hottoh::hottoh_const::{Command, CommandType};
 use crate::hottoh::hottoh_structs::{
-    calculate_checksum, CommandData, DAT0Data, DAT1Data, DAT2Data, DATReqResponseData, INFData,
+    CommandData, DAT0Data, DAT1Data, DAT2Data, DataError, INFData, WriteResult, calculate_checksum,
 };
-use log::warn;
 use std::str::FromStr;
-use std::time::Instant;
 use thiserror::Error;
 
-/// Errors that can occur when processing responses from the stove
-#[derive(Error, Debug)]
-pub enum ResponseError {
-    /// Command not implemented
+/// Fixed part of a frame: `#` + id (5) + desc (4) + length (4) + cmd (3) + type (1) + CRC (4) + `\n`
+const FRAME_OVERHEAD: usize = 23;
+
+/// Largest buffered data without a complete frame before it is discarded
+const MAX_BUFFER: usize = 8 * 1024;
+
+/// Error while decoding a frame
+#[derive(Error, Debug, PartialEq, Eq)]
+pub enum ProtocolError {
+    #[error("frame too short ({0} bytes)")]
+    TooShort(usize),
+    #[error("frame is not ASCII")]
+    NotAscii,
+    #[error("frame must start with '#' and end with '\\n'")]
+    BadDelimiters,
+    #[error("invalid {0} field")]
+    BadField(&'static str),
+    #[error("announced parameter length {announced} does not match frame size {size}")]
+    LengthMismatch { announced: usize, size: usize },
+    #[error("CRC mismatch: frame has {received}, computed {computed}")]
+    CrcMismatch { received: String, computed: String },
     #[error("{0}")]
-    NotImplemented(String),
-    /// Response data has incorrect structure
-    #[error("Incorrect response data: {0}")]
-    IncorrectResponseStruct(String),
+    Unsupported(String),
+    #[error(transparent)]
+    Data(#[from] DataError),
 }
 
-/// Request to be sent to the stove
-#[derive(Debug)]
+/// Request sent to the stove
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Request {
     req_id: u32,
     command: Command,
     command_type: CommandType,
     params: Vec<String>,
-    sent: bool,
-    sent_at: Option<Instant>,
-    marked_as_deleted: bool,
-}
-
-impl PartialEq for Request {
-    /// Compares two requests for equality
-    ///
-    /// Requests are considered equal if they have the same command, command type, and parameters
-    ///
-    /// # Arguments
-    ///
-    /// * `other` - The other request to compare with
-    ///
-    /// # Returns
-    ///
-    /// * `bool` - True if the requests are equal, false otherwise
-    fn eq(&self, other: &Self) -> bool {
-        self.command == other.command
-            && self.command_type == other.command_type
-            && self.params == other.params
-    }
 }
 
 impl Request {
-    /// Creates a new request
-    ///
-    /// # Arguments
-    ///
-    /// * `req_id` - Request ID
-    /// * `command` - Command to send
-    /// * `command_type` - Type of command (Read, Write, Execute)
-    /// * `params` - Command parameters
-    ///
-    /// # Returns
-    ///
-    /// * `Request` - A new request
+    /// Creates a request. `req_id` is reduced modulo 100000 to fit the 5-digit field.
     pub fn new(
         req_id: u32,
         command: Command,
@@ -70,276 +61,314 @@ impl Request {
         params: Vec<String>,
     ) -> Self {
         Self {
-            req_id,
+            req_id: req_id % 100_000,
             command,
             command_type,
             params,
-            sent: false,
-            sent_at: None,
-            marked_as_deleted: false,
         }
     }
 
-    /// Marks the request as sent
-    ///
-    /// Sets the sent flag to true and records the current time
-    pub fn mark_as_sent(&mut self) {
-        self.sent = true;
-        self.sent_at = Some(Instant::now());
-    }
-
-    /// Builds a message to be sent to the stove
-    ///
-    /// # Returns
-    ///
-    /// * `Vec<u8>` - The message as bytes
+    /// Encodes the request as a frame
     pub fn build_message(&self) -> Vec<u8> {
-        let cmd_type_str = self.command_type.as_str();
-        let command = self.command.as_str();
         let params = self.params.join(";") + ";";
-        let length = format!("{:04X}", params.len());
-
-        let crc_input = format!(
-            "{:05}C---{}{}{}{}",
-            self.req_id, length, command, cmd_type_str, params
+        let body = format!(
+            "{:05}C---{:04X}{}{}{}",
+            self.req_id,
+            params.len(),
+            self.command.as_str(),
+            self.command_type.as_str(),
+            params
         );
-        let checksum = calculate_checksum(&crc_input);
-
-        let message = format!(
-            "#{:05}C---{}{}{}{}{}\n",
-            self.req_id, length, command, cmd_type_str, params, checksum
-        );
-
-        message.into_bytes()
+        let checksum = calculate_checksum(&body);
+        format!("#{}{}\n", body, checksum).into_bytes()
     }
 
-    /// Gets the request ID
-    ///
-    /// # Returns
-    ///
-    /// * `u32` - The request ID
     pub fn get_req_id(&self) -> u32 {
         self.req_id
     }
 
-    /// Gets the command
-    ///
-    /// # Returns
-    ///
-    /// * `&Command` - Reference to the command
-    pub fn get_command(&self) -> &Command {
-        &self.command
+    pub fn get_command(&self) -> Command {
+        self.command
     }
 
-    /// Gets the command type
-    ///
-    /// # Returns
-    ///
-    /// * `&CommandType` - Reference to the command type
-    pub fn get_command_type(&self) -> &CommandType {
-        &self.command_type
+    pub fn get_command_type(&self) -> CommandType {
+        self.command_type
     }
 
-    /// Gets the command parameters
-    ///
-    /// # Returns
-    ///
-    /// * `&Vec<String>` - Reference to the parameters
-    pub fn get_params(&self) -> &Vec<String> {
+    pub fn get_params(&self) -> &[String] {
         &self.params
-    }
-
-    /// Checks if the request has been sent
-    ///
-    /// # Returns
-    ///
-    /// * `bool` - True if the request has been sent, false otherwise
-    pub fn is_sent(&self) -> bool {
-        self.sent
-    }
-
-    /// Gets the time when the request was sent
-    ///
-    /// # Returns
-    ///
-    /// * `Option<Instant>` - The time when the request was sent, or None if not sent
-    pub fn get_sent_at(&self) -> Option<Instant> {
-        self.sent_at
-    }
-
-    /// Checks if the request is marked for deletion
-    ///
-    /// # Returns
-    ///
-    /// * `bool` - True if the request is marked for deletion, false otherwise
-    pub fn is_marked_as_deleted(&self) -> bool {
-        self.marked_as_deleted
-    }
-
-    /// Sets the marked for deletion flag
-    ///
-    /// # Arguments
-    ///
-    /// * `value` - The new value for the flag
-    pub fn set_marked_as_deleted(&mut self, value: bool) {
-        self.marked_as_deleted = value;
     }
 }
 
-/// Response received from the stove
-#[allow(dead_code)]
+/// Response received from the stove, with a valid CRC
+#[derive(Debug)]
 pub struct Response {
     req_id: u32,
     command: Command,
     command_type: CommandType,
-    params_len: u32,
     params: Vec<String>,
-    command_data: CommandData,
-    crc: String,
-    crc_is_valid: bool,
-    marked_as_deleted: bool,
 }
 
 impl Response {
-    /// Converts response data to the appropriate CommandData type
-    ///
-    /// # Arguments
-    ///
-    /// * `data` - The response data as string slices
-    /// * `command` - The command type
-    ///
-    /// # Returns
-    ///
-    /// * `Result<CommandData, ResponseError>` - The parsed command data or an error
-    fn command_data_from_vec(
-        data: &Vec<&str>,
-        command: &Command,
-    ) -> Result<CommandData, ResponseError> {
-        match command {
-            Command::Inf => Ok(CommandData::Inf(INFData::from_slice(data)?)),
-            Command::Dat0 => Ok(CommandData::Dat0(DAT0Data::from_slice(data)?)),
-            Command::Dat1 => Ok(CommandData::Dat1(DAT1Data::from_slice(data)?)),
-            Command::Dat2 => Ok(CommandData::Dat2(DAT2Data::from_slice(data)?)),
-            Command::DatReqResponse => Ok(CommandData::DATReqResponse(
-                DATReqResponseData::from_slice(data)?,
-            )),
-            _ => Err(ResponseError::NotImplemented(format!(
-                "Not implemented for command: {:?}, data: {:?}",
-                command, &data
-            ))),
+    /// Decodes one complete frame (including the trailing `\n`). Never panics.
+    pub fn from_message(message: &[u8]) -> Result<Response, ProtocolError> {
+        if message.len() < FRAME_OVERHEAD + 1 {
+            return Err(ProtocolError::TooShort(message.len()));
         }
-    }
-
-    /// Parses a message from the stove into a Response
-    ///
-    /// # Arguments
-    ///
-    /// * `message` - The message to parse
-    ///
-    /// # Returns
-    ///
-    /// * `Result<Response, Box<dyn std::error::Error>>` - The parsed response or an error
-    pub fn from_message(message: &str) -> Result<Response, Box<dyn std::error::Error>> {
-        let req_id = str::parse(&message[1..6]).map_err(|_| "Invalid req_id")?;
-        let req_id_char = message
-            .chars()
-            .nth(6)
-            .ok_or("Missing req_id separator character")?;
-
-        let params_len =
-            usize::from_str_radix(&message[10..14], 16).map_err(|_| "Invalid param length")?;
-
-        let mut command = Command::from_str(&message[14..17])?;
-        let command_type = CommandType::from_str(&message[17..18])?;
-        let params_section = &message[18..&message.len() - 6];
-        let crc = &message[&message.len() - 5..&message.len() - 1];
-
-        let params: Vec<&str> = params_section.split(';').collect();
-
-        let crc_response = format!(
-            "{:05}{}---{:04X}{}{}{}",
-            req_id,
-            req_id_char,
-            params_len,
-            command.as_str(),
-            command_type.as_str(),
-            params.join(";") + ";"
-        );
-        let crc_is_valid = crc == calculate_checksum(&crc_response).as_str();
-
-        if command == Dat {
-            match params.len() {
-                36 => command = Command::Dat0,
-                11 => command = Command::Dat1,
-                22 => command = Command::Dat2,
-                1 => command = Command::DatReqResponse,
-                _ => {
-                    warn!(
-                        "Incorrect {} response structure: {}",
-                        command.as_str(),
-                        &message
-                    );
-                }
-            }
+        if !message.is_ascii() {
+            return Err(ProtocolError::NotAscii);
+        }
+        // ASCII was checked above, so byte offsets are char boundaries.
+        let message = std::str::from_utf8(message).map_err(|_| ProtocolError::NotAscii)?;
+        if !message.starts_with('#') || !message.ends_with('\n') {
+            return Err(ProtocolError::BadDelimiters);
         }
 
-        let command_data = Response::command_data_from_vec(&params, &command)?;
+        let field = |range: std::ops::Range<usize>, name: &'static str| {
+            message.get(range).ok_or(ProtocolError::BadField(name))
+        };
+
+        let req_id_str = field(1..6, "request id")?;
+        if !req_id_str.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(ProtocolError::BadField("request id"));
+        }
+        let req_id: u32 = req_id_str
+            .parse()
+            .map_err(|_| ProtocolError::BadField("request id"))?;
+        let params_len = usize::from_str_radix(field(10..14, "length")?, 16)
+            .map_err(|_| ProtocolError::BadField("length"))?;
+        if params_len + FRAME_OVERHEAD != message.len() {
+            return Err(ProtocolError::LengthMismatch {
+                announced: params_len,
+                size: message.len(),
+            });
+        }
+
+        let body_end = message.len() - 5;
+        let body = field(1..body_end, "body")?;
+        let received_crc = field(body_end..message.len() - 1, "crc")?;
+        let computed_crc = calculate_checksum(body);
+        if !received_crc.eq_ignore_ascii_case(&computed_crc) {
+            return Err(ProtocolError::CrcMismatch {
+                received: received_crc.to_string(),
+                computed: computed_crc,
+            });
+        }
+
+        let command =
+            Command::from_str(field(14..17, "command")?).map_err(ProtocolError::Unsupported)?;
+        let command_type = CommandType::from_str(field(17..18, "command type")?)
+            .map_err(ProtocolError::Unsupported)?;
+
+        // Parameters always end with ';' in the firmware format: drop the last empty item.
+        let params_section = field(18..18 + params_len, "parameters")?;
+        let params_section = params_section.strip_suffix(';').unwrap_or(params_section);
+        let params = if params_section.is_empty() {
+            Vec::new()
+        } else {
+            params_section.split(';').map(str::to_string).collect()
+        };
 
         Ok(Response {
             req_id,
             command,
             command_type,
-            params_len: params_len.try_into()?,
-            params: params.iter().map(|&s| s.to_string()).collect(),
-            command_data,
-            crc: crc.to_string(),
-            crc_is_valid,
-            marked_as_deleted: false,
+            params,
         })
     }
 
-    /// Gets the request ID
-    ///
-    /// # Returns
-    ///
-    /// * `u32` - The request ID
     pub fn get_req_id(&self) -> u32 {
         self.req_id
     }
 
-    /// Gets the command data
-    ///
-    /// # Returns
-    ///
-    /// * `&CommandData` - Reference to the command data
-    pub fn get_command_data(&self) -> &CommandData {
-        &self.command_data
+    #[cfg(test)]
+    pub fn get_command(&self) -> Command {
+        self.command
     }
 
-    /// Checks if the CRC is valid
-    ///
-    /// # Returns
-    ///
-    /// * `bool` - True if the CRC is valid, false otherwise
-    pub fn is_crc_valid(&self) -> bool {
-        self.crc_is_valid
+    #[cfg(test)]
+    pub fn get_params(&self) -> &[String] {
+        &self.params
     }
 
-    /// Checks if the response is marked for deletion
-    ///
-    /// # Returns
-    ///
-    /// * `bool` - True if the response is marked for deletion, false otherwise
-    pub fn is_marked_as_deleted(&self) -> bool {
-        self.marked_as_deleted
+    /// Decodes the parameters according to the command. DAT pages are identified by their
+    /// first field (the page number), not by their field count.
+    pub fn command_data(&self) -> Result<CommandData, ProtocolError> {
+        match (self.command, self.command_type) {
+            (Command::Inf, _) => Ok(CommandData::Inf(INFData::from_slice(&self.params)?)),
+            (Command::Dat, CommandType::Write) => {
+                Ok(CommandData::Write(WriteResult::from_slice(&self.params)?))
+            }
+            (Command::Dat, CommandType::Read) => match self.params.first().map(String::as_str) {
+                Some("0") => Ok(CommandData::Dat0(DAT0Data::from_slice(&self.params)?)),
+                Some("1") => Ok(CommandData::Dat1(DAT1Data::from_slice(&self.params)?)),
+                Some("2") => Ok(CommandData::Dat2(DAT2Data::from_slice(&self.params)?)),
+                other => Err(ProtocolError::Unsupported(format!(
+                    "unknown DAT page {:?}",
+                    other
+                ))),
+            },
+            (command, command_type) => Err(ProtocolError::Unsupported(format!(
+                "{} {} answers are not supported",
+                command.as_str(),
+                command_type.as_str()
+            ))),
+        }
+    }
+}
+
+/// Reassembles frames from a TCP byte stream (frames may be split or coalesced)
+#[derive(Debug, Default)]
+pub struct FrameBuffer {
+    buffer: Vec<u8>,
+}
+
+impl FrameBuffer {
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    /// Sets the marked for deletion flag
-    ///
-    /// # Arguments
-    ///
-    /// * `value` - The new value for the flag
-    pub fn set_marked_as_deleted(&mut self, value: bool) {
-        self.marked_as_deleted = value;
+    /// Appends received bytes
+    pub fn extend(&mut self, data: &[u8]) {
+        self.buffer.extend_from_slice(data);
+        if self.buffer.len() > MAX_BUFFER && !self.buffer.contains(&b'\n') {
+            log::warn!(
+                "Discarding {} buffered bytes without frame end",
+                self.buffer.len()
+            );
+            self.buffer.clear();
+        }
+    }
+
+    /// Extracts the next complete frame (from `#` to `\n` included), skipping garbage
+    pub fn next_frame(&mut self) -> Option<Vec<u8>> {
+        loop {
+            let end = self.buffer.iter().position(|&b| b == b'\n')?;
+            let line: Vec<u8> = self.buffer.drain(..=end).collect();
+            // A frame starts at the last '#' before the end of line.
+            if let Some(start) = line.iter().rposition(|&b| b == b'#') {
+                return Some(line[start..].to_vec());
+            }
+            if !line.iter().all(u8::is_ascii_whitespace) {
+                log::warn!(
+                    "Discarding data without frame start: {:?}",
+                    String::from_utf8_lossy(&line)
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const INF_FRAME: &[u8] = b"#00001C---0014INFRHOTTOH32;10.5.0;196;BEA1\n";
+
+    #[test]
+    fn build_inf_request() {
+        let req = Request::new(1, Command::Inf, CommandType::Read, vec![]);
+        let msg = String::from_utf8(req.build_message()).unwrap();
+        assert!(msg.starts_with("#00001C---0001INFR;"));
+        assert!(msg.ends_with('\n'));
+        assert_eq!(msg.len(), 1 + FRAME_OVERHEAD);
+    }
+
+    #[test]
+    fn build_write_request() {
+        let req = Request::new(
+            123456,
+            Command::Dat,
+            CommandType::Write,
+            vec!["3".into(), "215".into()],
+        );
+        let msg = String::from_utf8(req.build_message()).unwrap();
+        let body = "23456C---0006DATW3;215;";
+        assert_eq!(msg, format!("#{}{}\n", body, calculate_checksum(body)));
+    }
+
+    #[test]
+    fn built_frames_parse_back() {
+        let req = Request::new(42, Command::Dat, CommandType::Read, vec!["0".into()]);
+        let resp = Response::from_message(&req.build_message()).unwrap();
+        assert_eq!(resp.get_req_id(), 42);
+        assert_eq!(resp.get_params(), ["0"]);
+    }
+
+    #[test]
+    fn parse_real_inf_frame() {
+        let resp = Response::from_message(INF_FRAME).unwrap();
+        assert_eq!(resp.get_req_id(), 1);
+        assert_eq!(resp.get_command(), Command::Inf);
+        assert!(matches!(resp.command_data(), Ok(CommandData::Inf(_))));
+    }
+
+    #[test]
+    fn write_answers_are_decoded() {
+        for (params, expected) in [
+            ("OK;", WriteResult::Ok),
+            ("ERR;17;", WriteResult::Error(17)),
+        ] {
+            let body = format!("00007C---{:04X}DATW{}", params.len(), params);
+            let frame = format!("#{}{}\n", body, calculate_checksum(&body));
+            let resp = Response::from_message(frame.as_bytes()).unwrap();
+            match resp.command_data().unwrap() {
+                CommandData::Write(result) => assert_eq!(result, expected),
+                other => panic!("unexpected {:?}", other),
+            }
+        }
+    }
+
+    #[test]
+    fn truncated_and_garbage_frames_do_not_panic() {
+        for len in 0..INF_FRAME.len() {
+            let _ = Response::from_message(&INF_FRAME[..len]);
+            let _ = Response::from_message(&INF_FRAME[len..]);
+        }
+        assert!(Response::from_message(b"#\n").is_err());
+        assert!(
+            Response::from_message("#0000é---0014INFRHOTTOH32;10.5.0;196;BEA1\n".as_bytes())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn bad_crc_and_length_are_rejected() {
+        let mut bad_crc = INF_FRAME.to_vec();
+        bad_crc[INF_FRAME.len() - 2] = b'0';
+        assert!(matches!(
+            Response::from_message(&bad_crc),
+            Err(ProtocolError::CrcMismatch { .. })
+        ));
+        let bad_len = b"#00001C---0015INFRHOTTOH32;10.5.0;196;BEA1\n";
+        assert!(matches!(
+            Response::from_message(bad_len),
+            Err(ProtocolError::LengthMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn frame_buffer_reassembles_split_and_coalesced_frames() {
+        let mut buf = FrameBuffer::new();
+        buf.extend(&INF_FRAME[..10]);
+        assert!(buf.next_frame().is_none());
+        buf.extend(&INF_FRAME[10..]);
+        buf.extend(INF_FRAME);
+        buf.extend(b"garbage#00001");
+        assert_eq!(buf.next_frame().unwrap(), INF_FRAME);
+        assert_eq!(buf.next_frame().unwrap(), INF_FRAME);
+        assert!(buf.next_frame().is_none());
+        buf.extend(b"C---\n");
+        // Incomplete garbage ending with '\n' is returned as a frame and rejected by the parser.
+        let frame = buf.next_frame().unwrap();
+        assert!(Response::from_message(&frame).is_err());
+    }
+
+    #[test]
+    fn frame_buffer_skips_noise_before_frame() {
+        let mut buf = FrameBuffer::new();
+        buf.extend(b"\r\nnoise\n");
+        buf.extend(INF_FRAME);
+        assert_eq!(buf.next_frame().unwrap(), INF_FRAME);
     }
 }

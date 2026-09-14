@@ -1,82 +1,70 @@
 mod hottoh;
+
 use crate::hottoh::http_api::start_http_server;
 use crate::hottoh::shared_struct::SharedState;
+use actix_web::rt::System;
 use hottoh::config::load_config;
 use hottoh::logger::initialize_logger;
-use hottoh::tcp_client::TcpClient;
-use hottoh::tcp_client_structs::{Request, Response};
-use log::info;
+use hottoh::tcp_client::{TcpClient, WriteQueue};
+use log::{error, info};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-
-use actix_web::rt::System;
+use std::time::Duration;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    let args: Vec<String> = std::env::args().collect();
-    let config_path = args.get(1).map(|s| s.as_str());
-    // Load configuration
-    let config = match load_config(config_path) {
-        Ok(config) => {
-            println!("Configuration loaded successfully!");
-            println!(
-                "Stove IP: {}, Stove Port: {}",
-                config.stove.ip, config.stove.port
-            );
-            println!("HTTP API Port: {}", config.http_api.port);
-            Arc::new(RwLock::new(config))
-        }
+    let config_path = std::env::args().nth(1);
+    let config = match load_config(config_path.as_deref()) {
+        Ok(config) => config,
         Err(e) => {
             eprintln!("Failed to load configuration: {}", e);
             std::process::exit(1);
         }
     };
-    initialize_logger(Arc::clone(&config)).expect("Failed to initialize logger");
-    info!("Starting...");
+    println!(
+        "Stove: {}:{}, HTTP API port: {}",
+        config.stove.ip, config.stove.port, config.http_api.port
+    );
+    let _logger = match initialize_logger(&config) {
+        Ok(handle) => handle,
+        Err(e) => {
+            eprintln!("Failed to initialize logger: {}", e);
+            std::process::exit(1);
+        }
+    };
+    info!("Starting hottoh_api {}...", env!("CARGO_PKG_VERSION"));
+
     let running = Arc::new(AtomicBool::new(true));
     ctrlc::set_handler({
         let running = Arc::clone(&running);
         move || {
             info!("Ctrl-C received! Exiting...");
             running.store(false, Ordering::SeqCst);
-            // Stop the Actix system
             System::current().stop();
         }
     })
-    .expect("Error while handling Ctrl-C");
+    .expect("Error while setting the Ctrl-C handler");
 
-    let request_id_counter = Arc::new(Mutex::new(0));
-    let request_queue = Arc::new(RwLock::new(VecDeque::<Request>::new()));
-    let response_queue = Arc::new(RwLock::new(VecDeque::<Response>::new()));
-    let tcp_client = TcpClient::new(
-        Arc::clone(&request_queue),
-        Arc::clone(&response_queue),
-        Arc::clone(&running),
-    );
     let shared_state = Arc::new(RwLock::new(SharedState::new()));
+    let writes: WriteQueue = Arc::new(Mutex::new(VecDeque::new()));
+    let request_id = Arc::new(AtomicU32::new(1));
 
-    let http_server_task = start_http_server(
-        Arc::clone(&request_queue),
+    let worker = TcpClient::new(
+        format!("{}:{}", config.stove.ip, config.stove.port),
+        Duration::from_millis(config.stove.poll_interval_ms),
+        Arc::clone(&writes),
         Arc::clone(&shared_state),
-        Arc::clone(&request_id_counter),
-        Arc::clone(&config),
-    );
+        Arc::clone(&request_id),
+        Arc::clone(&running),
+    )
+    .start();
 
-    let comm_handle = tcp_client.start_tcp_thread(Arc::clone(&config));
-    let manage_handle = tcp_client.message_management_thread(shared_state);
-    let periodic_handle = tcp_client.periodic_request_thread(Arc::clone(&request_id_counter));
+    let result = start_http_server(&config, shared_state, writes, request_id).await;
 
-    // Wait for the HTTP server task to complete
-    http_server_task.await?;
-
-    // Signal other threads to stop
     running.store(false, Ordering::SeqCst);
-
-    // Wait for other threads to complete
-    comm_handle.join().unwrap();
-    manage_handle.join().unwrap();
-    periodic_handle.join().unwrap();
-
-    Ok(())
+    if worker.join().is_err() {
+        error!("TCP worker thread ended with a panic");
+    }
+    result
 }

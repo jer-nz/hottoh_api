@@ -1,10 +1,11 @@
 use crate::hottoh::config::AppConfig;
 use chrono::Local;
-use flexi_logger::{Cleanup, Criterion, Duplicate, FileSpec, Logger, Naming, WriteMode};
+use flexi_logger::{
+    Cleanup, Criterion, Duplicate, FileSpec, Logger, LoggerHandle, Naming, WriteMode,
+};
 use log::Record;
 use std::error::Error;
 use std::io::Write;
-use std::sync::{Arc, RwLock};
 
 /// Custom log formatter that includes timestamp, log level, and message
 ///
@@ -47,16 +48,15 @@ fn custom_format(
 ///
 /// # Arguments
 ///
-/// * `config` - Application configuration containing log settings
+/// * `cfg` - Application configuration containing log settings
 ///
 /// # Returns
 ///
-/// * `Result<(), Box<dyn Error>>` - Success or error
-pub fn initialize_logger(config: Arc<RwLock<AppConfig>>) -> Result<(), Box<dyn Error>> {
-    let cfg = config
-        .read()
-        .expect("Cannot read config in initialize_logger.");
-    Logger::try_with_str(&cfg.log.level)
+/// * `Result<LoggerHandle, Box<dyn Error>>` - The logger handle, or an error
+///
+/// The returned handle must be kept alive: dropping it stops the buffered file writer.
+pub fn initialize_logger(cfg: &AppConfig) -> Result<LoggerHandle, Box<dyn Error>> {
+    let handle = Logger::try_with_str(&cfg.log.level)
         .map_err(|e| format!("Failed to initialize logger: {}", e))?
         .log_to_file(
             FileSpec::default()
@@ -74,5 +74,5 @@ pub fn initialize_logger(config: Arc<RwLock<AppConfig>>) -> Result<(), Box<dyn E
         .start()
         .map_err(|e| format!("Failed to start logger: {}", e))?;
 
-    Ok(())
+    Ok(handle)
 }

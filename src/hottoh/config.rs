@@ -19,6 +19,13 @@ pub struct StoveConfig {
     pub ip: String,
     /// TCP port of the stove
     pub port: u16,
+    /// Pause between two polling cycles (INF + DAT 0/1/2), in milliseconds
+    #[serde(default = "default_poll_interval_ms")]
+    pub poll_interval_ms: u64,
+}
+
+fn default_poll_interval_ms() -> u64 {
+    1000
 }
 
 /// Configuration for the HTTP API
