@@ -1,106 +1,412 @@
-use crate::hottoh::hottoh_structs::{DAT0Data, DAT1Data, DAT2Data, INFData};
-use serde::Serialize;
+//! State shared between the TCP worker, the HTTP API and the statistics thread.
 
-/// Shared state containing all data from the stove
-///
-/// This structure holds all the data retrieved from the stove,
-/// including general information, status, temperatures, and settings.
-#[derive(Debug, Serialize, Default, Clone)]
+use crate::hottoh::hottoh_const::{Command, CommandType, StoveCommands};
+use crate::hottoh::hottoh_structs::{DAT0Data, DAT1Data, DAT2Data, INFData, now};
+use crate::hottoh::tcp_client_structs::Request;
+use serde::Serialize;
+use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::thread;
+use std::time::{Duration, Instant};
+
+/// Number of write requests whose outcome is kept for `GET /api/request/{id}`
+const REQUEST_HISTORY: usize = 100;
+
+/// Writes waiting for the stove beyond this count are refused (HTTP 503)
+pub const MAX_PENDING_WRITES: usize = 32;
+
+/// Outcome of a write request
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestState {
+    /// Waiting in the queue
+    Pending,
+    /// Sent to the stove, waiting for the answer
+    Sent,
+    /// The stove answered `OK;`
+    Ok,
+    /// The stove answered `ERR;<code>;`
+    Error,
+    /// No answer after all attempts
+    Timeout,
+}
+
+/// Status of a write request, as returned by `GET /api/request/{id}`
+#[derive(Debug, Serialize, Clone)]
+pub struct RequestStatus {
+    pub request_id: u32,
+    pub command: String,
+    pub value: String,
+    pub status: RequestState,
+    /// Error code from the stove (`ERR;<code>;`)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    pub attempts: u32,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// Counters since start, exposed in `GET /api/status` and logged periodically
+#[derive(Debug, Serialize, Clone, Default)]
+pub struct Stats {
+    /// Frames sent to the stove (reads and writes, retries included)
+    pub requests: u64,
+    /// Answers matching their request
+    pub answers: u64,
+    /// Requests left without answer
+    pub timeouts: u64,
+    /// Received frames rejected by the parser (CRC, length, format)
+    pub invalid_frames: u64,
+    /// Valid frames answering an older request
+    pub late_answers: u64,
+    /// Answers whose content could not be decoded
+    pub decode_errors: u64,
+    pub writes_ok: u64,
+    /// Writes refused by the stove (`ERR;<code>;`)
+    pub writes_refused: u64,
+    /// Writes abandoned (no answer after all attempts, or expired in the queue)
+    pub writes_failed: u64,
+    /// Established connections that were lost
+    pub disconnections: u64,
+    /// Connection attempts that failed
+    pub connect_failures: u64,
+    /// Sum of the answer delays, for averages
+    pub latency_total_ms: u64,
+    pub latency_max_ms: u64,
+}
+
+impl Stats {
+    pub fn record_answer(&mut self, latency: Duration) {
+        let ms = u64::try_from(latency.as_millis()).unwrap_or(u64::MAX);
+        self.answers += 1;
+        self.latency_total_ms = self.latency_total_ms.saturating_add(ms);
+        self.latency_max_ms = self.latency_max_ms.max(ms);
+    }
+}
+
+/// State of the TCP link with the stove, as returned by `GET /api/status`
+#[derive(Debug, Serialize, Clone, Default)]
+pub struct ConnectionStatus {
+    pub stove_address: String,
+    pub connected: bool,
+    /// Time of the last valid answer from the stove
+    pub last_response_at: Option<String>,
+    /// Last connection or communication error (kept after recovery, see `last_error_at`)
+    pub last_error: Option<String>,
+    pub last_error_at: Option<String>,
+    /// Successful TCP connections since start (1 = never reconnected)
+    pub connections: u64,
+    pub stats: Stats,
+}
+
+/// Data and request tracking, behind the lock of [`Bridge`]
+#[derive(Debug, Default)]
 pub struct SharedState {
-    /// General information about the stove
     inf: INFData,
-    /// Main stove data (status, temperatures, power levels, etc.)
     dat0: DAT0Data,
-    /// Additional stove data (temperatures)
     dat1: DAT1Data,
-    /// Additional stove data (pumps, valves, etc.)
     dat2: DAT2Data,
+    inf_received: bool,
+    dat0_received: bool,
+    dat1_received: bool,
+    connection: ConnectionStatus,
+    requests: HashMap<u32, RequestStatus>,
+    request_order: VecDeque<u32>,
 }
 
 impl SharedState {
-    /// Creates a new SharedState with default values
-    ///
-    /// # Returns
-    ///
-    /// * `SharedState` - A new instance with default values
-    pub fn new() -> Self {
-        Self {
-            inf: INFData::default(),
-            dat0: DAT0Data::default(),
-            dat1: DAT1Data::default(),
-            dat2: DAT2Data::default(),
-        }
-    }
-
-    /// Gets the general information data
-    ///
-    /// # Returns
-    ///
-    /// * `&INFData` - Reference to the INF data
     pub fn get_inf(&self) -> &INFData {
         &self.inf
     }
 
-    /// Gets the main stove data
-    ///
-    /// # Returns
-    ///
-    /// * `&DAT0Data` - Reference to the DAT0 data
     pub fn get_dat0(&self) -> &DAT0Data {
         &self.dat0
     }
 
-    /// Gets the additional temperature data
-    ///
-    /// # Returns
-    ///
-    /// * `&DAT1Data` - Reference to the DAT1 data
     pub fn get_dat1(&self) -> &DAT1Data {
         &self.dat1
     }
 
-    /// Gets the additional pump and valve data
-    ///
-    /// # Returns
-    ///
-    /// * `&DAT2Data` - Reference to the DAT2 data
     pub fn get_dat2(&self) -> &DAT2Data {
         &self.dat2
     }
 
-    /// Updates the general information data
-    ///
-    /// # Arguments
-    ///
-    /// * `inf` - The new INF data
-    pub fn set_inf(&mut self, inf: &INFData) {
-        self.inf = inf.clone();
+    /// INF data, only once a real answer has been received
+    pub fn inf_if_received(&self) -> Option<&INFData> {
+        self.inf_received.then_some(&self.inf)
     }
 
-    /// Updates the main stove data
-    ///
-    /// # Arguments
-    ///
-    /// * `dat0` - The new DAT0 data
-    pub fn set_dat0(&mut self, dat0: &DAT0Data) {
-        self.dat0 = dat0.clone();
+    /// DAT0 data, only once a real page has been received (used for range checks)
+    pub fn dat0_if_received(&self) -> Option<&DAT0Data> {
+        self.dat0_received.then_some(&self.dat0)
     }
 
-    /// Updates the additional temperature data
-    ///
-    /// # Arguments
-    ///
-    /// * `dat1` - The new DAT1 data
-    pub fn set_dat1(&mut self, dat1: &DAT1Data) {
-        self.dat1 = dat1.clone();
+    /// DAT1 data, only once a real page has been received (used for range checks)
+    pub fn dat1_if_received(&self) -> Option<&DAT1Data> {
+        self.dat1_received.then_some(&self.dat1)
     }
 
-    /// Updates the additional pump and valve data
-    ///
-    /// # Arguments
-    ///
-    /// * `dat2` - The new DAT2 data
-    pub fn set_dat2(&mut self, dat2: &DAT2Data) {
-        self.dat2 = dat2.clone();
+    pub fn set_inf(&mut self, inf: INFData) {
+        self.inf = inf;
+        self.inf_received = true;
+    }
+
+    pub fn set_dat0(&mut self, dat0: DAT0Data) {
+        self.dat0 = dat0;
+        self.dat0_received = true;
+    }
+
+    pub fn set_dat1(&mut self, dat1: DAT1Data) {
+        self.dat1 = dat1;
+        self.dat1_received = true;
+    }
+
+    pub fn set_dat2(&mut self, dat2: DAT2Data) {
+        self.dat2 = dat2;
+    }
+
+    pub fn connection(&self) -> &ConnectionStatus {
+        &self.connection
+    }
+
+    pub fn stats_mut(&mut self) -> &mut Stats {
+        &mut self.connection.stats
+    }
+
+    pub fn set_stove_address(&mut self, address: &str) {
+        self.connection.stove_address = address.to_string();
+    }
+
+    pub fn set_connected(&mut self, connected: bool) {
+        if connected && !self.connection.connected {
+            self.connection.connections += 1;
+        }
+        self.connection.connected = connected;
+    }
+
+    pub fn set_last_error(&mut self, error: impl Into<String>) {
+        self.connection.last_error = Some(error.into());
+        self.connection.last_error_at = Some(now());
+    }
+
+    pub fn mark_response_received(&mut self) {
+        self.connection.last_response_at = Some(now());
+    }
+
+    /// Registers a new write request as pending
+    pub fn track_request(&mut self, request_id: u32, command: &str, value: &str) {
+        let timestamp = now();
+        let status = RequestStatus {
+            request_id,
+            command: command.to_string(),
+            value: value.to_string(),
+            status: RequestState::Pending,
+            error_code: None,
+            message: None,
+            attempts: 0,
+            created_at: timestamp.clone(),
+            updated_at: timestamp,
+        };
+        if self.requests.insert(request_id, status).is_none() {
+            self.request_order.push_back(request_id);
+        }
+        while self.request_order.len() > REQUEST_HISTORY {
+            if let Some(old) = self.request_order.pop_front() {
+                self.requests.remove(&old);
+            }
+        }
+    }
+
+    /// Updates the state of a tracked request (ignored if it left the history)
+    pub fn update_request(
+        &mut self,
+        request_id: u32,
+        state: RequestState,
+        error_code: Option<i32>,
+        message: Option<String>,
+    ) {
+        if let Some(status) = self.requests.get_mut(&request_id) {
+            if state == RequestState::Sent {
+                status.attempts += 1;
+            }
+            status.status = state;
+            status.error_code = error_code;
+            status.message = message;
+            status.updated_at = now();
+        }
+    }
+
+    pub fn get_request(&self, request_id: u32) -> Option<&RequestStatus> {
+        self.requests.get(&request_id)
+    }
+}
+
+/// Write request waiting to be sent
+#[derive(Debug)]
+pub struct QueuedWrite {
+    pub request: Request,
+    pub attempts: u32,
+    pub queued_at: Instant,
+}
+
+/// Everything shared between threads. Locks are never held across a blocking call; when both
+/// are needed, the write queue is locked before the state.
+#[derive(Debug)]
+pub struct Bridge {
+    state: RwLock<SharedState>,
+    writes: Mutex<VecDeque<QueuedWrite>>,
+    next_id: AtomicU32,
+    running: AtomicBool,
+    started: Instant,
+    started_at: String,
+}
+
+impl Default for Bridge {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Bridge {
+    pub fn new() -> Self {
+        Self {
+            state: RwLock::default(),
+            writes: Mutex::default(),
+            next_id: AtomicU32::new(1),
+            running: AtomicBool::new(true),
+            started: Instant::now(),
+            started_at: now(),
+        }
+    }
+
+    /// Reads the state, recovering from a poisoned lock instead of panicking
+    pub fn state(&self) -> RwLockReadGuard<'_, SharedState> {
+        self.state.read().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Modifies the state, recovering from a poisoned lock instead of panicking
+    pub fn state_mut(&self) -> RwLockWriteGuard<'_, SharedState> {
+        self.state.write().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Queue of writes waiting for the stove
+    pub fn writes(&self) -> MutexGuard<'_, VecDeque<QueuedWrite>> {
+        self.writes.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Next frame id (5 digits on the wire)
+    pub fn next_request_id(&self) -> u32 {
+        self.next_id.fetch_add(1, Ordering::SeqCst) % 100_000
+    }
+
+    /// Queues a write and tracks its outcome. Returns `None` when too many writes are waiting.
+    pub fn queue_write(&self, command: StoveCommands, value: i32) -> Option<u32> {
+        let mut writes = self.writes();
+        if writes.len() >= MAX_PENDING_WRITES {
+            return None;
+        }
+        let request_id = self.next_request_id();
+        self.state_mut()
+            .track_request(request_id, command.name(), &value.to_string());
+        writes.push_back(QueuedWrite {
+            request: Request::new(
+                request_id,
+                Command::Dat,
+                CommandType::Write,
+                vec![(command as u32).to_string(), value.to_string()],
+            ),
+            attempts: 0,
+            queued_at: Instant::now(),
+        });
+        Some(request_id)
+    }
+
+    pub fn is_running(&self) -> bool {
+        self.running.load(Ordering::SeqCst)
+    }
+
+    /// Asks the background threads to stop
+    pub fn stop(&self) {
+        self.running.store(false, Ordering::SeqCst);
+    }
+
+    /// Sleeps in small steps, returning early when the application stops
+    pub fn sleep(&self, duration: Duration) {
+        let end = Instant::now() + duration;
+        while self.is_running() {
+            let now = Instant::now();
+            if now >= end {
+                break;
+            }
+            thread::sleep((end - now).min(Duration::from_millis(100)));
+        }
+    }
+
+    pub fn uptime(&self) -> Duration {
+        self.started.elapsed()
+    }
+
+    pub fn started_at(&self) -> &str {
+        &self.started_at
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn request_history_is_bounded() {
+        let mut state = SharedState::default();
+        for id in 0..(REQUEST_HISTORY as u32 + 10) {
+            state.track_request(id, "OnOff", "1");
+        }
+        assert!(state.get_request(0).is_none());
+        assert!(state.get_request(REQUEST_HISTORY as u32 + 9).is_some());
+        assert_eq!(state.requests.len(), REQUEST_HISTORY);
+    }
+
+    #[test]
+    fn request_lifecycle() {
+        let mut state = SharedState::default();
+        state.track_request(7, "PowerLevel", "3");
+        state.update_request(7, RequestState::Sent, None, None);
+        state.update_request(
+            7,
+            RequestState::Error,
+            Some(17),
+            Some("value out of range".into()),
+        );
+        let status = state.get_request(7).unwrap();
+        assert_eq!(status.status, RequestState::Error);
+        assert_eq!(status.error_code, Some(17));
+        assert_eq!(status.attempts, 1);
+    }
+
+    #[test]
+    fn write_queue_is_bounded() {
+        let bridge = Bridge::new();
+        for _ in 0..MAX_PENDING_WRITES {
+            let id = bridge.queue_write(StoveCommands::PowerLevel, 3).unwrap();
+            assert_eq!(
+                bridge.state().get_request(id).unwrap().status,
+                RequestState::Pending
+            );
+        }
+        assert!(bridge.queue_write(StoveCommands::PowerLevel, 3).is_none());
+        assert_eq!(bridge.writes().len(), MAX_PENDING_WRITES);
+    }
+
+    #[test]
+    fn latency_is_accumulated() {
+        let mut stats = Stats::default();
+        stats.record_answer(Duration::from_millis(40));
+        stats.record_answer(Duration::from_millis(100));
+        assert_eq!(stats.answers, 2);
+        assert_eq!(stats.latency_total_ms, 140);
+        assert_eq!(stats.latency_max_ms, 100);
     }
 }

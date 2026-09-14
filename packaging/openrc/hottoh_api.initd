@@ -1,0 +1,26 @@
+#!/sbin/openrc-run
+# HTTP API bridge for HottoH pellet stoves (https://github.com/jer-nz/hottoh_api)
+# The stove Wi-Fi module accepts a single TCP client: run one instance per stove.
+
+name="hottoh_api"
+description="HTTP API bridge for HottoH pellet stoves"
+supervisor="supervise-daemon"
+command="/usr/bin/hottoh_api"
+command_args="${HOTTOH_CONFIG:-/etc/hottoh_api/config.ini}"
+command_user="hottoh:hottoh"
+directory="/var/lib/hottoh_api"
+respawn_delay="${respawn_delay:-5}"
+respawn_max="${respawn_max:-0}"
+# Output that cannot reach the application log (early startup errors); panics are also logged
+output_log="/var/log/hottoh_api/stderr.log"
+error_log="/var/log/hottoh_api/stderr.log"
+
+depend() {
+    need net
+    after firewall
+}
+
+start_pre() {
+    checkpath -d -m 0755 -o hottoh:hottoh /var/log/hottoh_api /var/lib/hottoh_api
+    checkpath -f -m 0644 -o hottoh:hottoh /var/log/hottoh_api/stderr.log
+}

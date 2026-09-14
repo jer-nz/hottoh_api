@@ -16,6 +16,8 @@ pub mod http_api;
 pub mod logger;
 /// Shared state between components
 pub mod shared_struct;
+/// Periodic statistics and process metrics
+pub mod stats;
 /// TCP client for communicating with the stove
 pub mod tcp_client;
 /// Data structures for TCP client requests and responses

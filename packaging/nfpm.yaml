@@ -1,0 +1,68 @@
+# nFPM: builds the Alpine (.apk) and Debian (.deb) packages from a static musl binary.
+# Used through packaging/package.sh, which fills in ${BINARY} (nFPM does not expand variables in
+# file paths). ARCH uses Go names (amd64, arm64); nFPM converts them for each package format.
+name: hottoh-api
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+section: net
+priority: optional
+maintainer: Jer-Nz <115635137+jer-nz@users.noreply.github.com>
+# One line: the Alpine .PKGINFO format has no continuation lines
+description: HTTP API bridge for HottoH pellet stoves (Wifier 2.0 local TCP protocol)
+vendor: jer-nz
+homepage: https://github.com/jer-nz/hottoh_api
+license: MIT
+
+contents:
+  - src: ${BINARY}
+    dst: /usr/bin/hottoh_api
+    file_info:
+      mode: 0755
+  - src: packaging/config.ini
+    dst: /etc/hottoh_api/config.ini
+    type: config|noreplace
+    file_info:
+      mode: 0644
+
+  # Alpine: OpenRC
+  - src: packaging/openrc/hottoh_api.initd
+    dst: /etc/init.d/hottoh_api
+    packager: apk
+    file_info:
+      mode: 0755
+  - src: packaging/openrc/hottoh_api.confd
+    dst: /etc/conf.d/hottoh_api
+    type: config|noreplace
+    packager: apk
+    file_info:
+      mode: 0644
+
+  # Debian: systemd
+  - src: packaging/systemd/hottoh_api.service
+    dst: /usr/lib/systemd/system/hottoh_api.service
+    packager: deb
+    file_info:
+      mode: 0644
+
+  - src: README.md
+    dst: /usr/share/doc/hottoh-api/README.md
+    file_info:
+      mode: 0644
+  - src: CHANGELOG.md
+    dst: /usr/share/doc/hottoh-api/CHANGELOG.md
+    file_info:
+      mode: 0644
+  - src: LICENSE
+    dst: /usr/share/doc/hottoh-api/LICENSE
+    file_info:
+      mode: 0644
+
+scripts:
+  preinstall: packaging/scripts/preinstall.sh
+  postinstall: packaging/scripts/postinstall.sh
+  preremove: packaging/scripts/preremove.sh
+
+apk:
+  scripts:
+    postupgrade: packaging/scripts/postupgrade-apk.sh

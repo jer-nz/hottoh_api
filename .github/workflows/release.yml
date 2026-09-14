@@ -1,105 +1,148 @@
 name: Release
 
+# A `v*` tag builds and publishes the release. Run manually (Actions > Release > Run workflow)
+# to build every file without publishing anything: they are kept as workflow artifacts.
 on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
-# Ajout des permissions nécessaires pour créer des releases
 permissions:
-  contents: write
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  NFPM_VERSION: 2.46.3
+  NFPM_SHA256: 9170d25ea056d7329def38134b2bcad98d02d221f8331610dcd619e84d28c565
 
 jobs:
-  build-and-upload:
-    name: Build and upload
-    runs-on: ${{ matrix.os }}
+  linux:
+    name: Linux ${{ matrix.arch }} (static musl)
+    # Native runners and the rust Alpine image: static binaries without cross-compilation tools
+    runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
         include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            artifact_name: hottoh_api
-            asset_name: hottoh_api-linux-amd64
-          - os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-            artifact_name: hottoh_api
-            asset_name: hottoh_api-linux-arm64
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            artifact_name: hottoh_api.exe
-            asset_name: hottoh_api-windows-amd64.exe
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            artifact_name: hottoh_api
-            asset_name: hottoh_api-macos-amd64
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            artifact_name: hottoh_api
-            asset_name: hottoh_api-macos-arm64
-
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Install Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          target: ${{ matrix.target }}
-          override: true
-      
-      - name: Install cross-compilation tools
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
 
       - name: Build
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: --release --target ${{ matrix.target }}
-          use-cross: ${{ matrix.os == 'ubuntu-latest' && matrix.target == 'aarch64-unknown-linux-gnu' }}
-
-      - name: Prepare asset
-        shell: bash
         run: |
-          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            cp target/${{ matrix.target }}/release/${{ matrix.artifact_name }} ${{ matrix.asset_name }}
-          else
-            cp target/${{ matrix.target }}/release/${{ matrix.artifact_name }} ${{ matrix.asset_name }}
-            chmod +x ${{ matrix.asset_name }}
-          fi
+          docker run --rm -v "$PWD":/src -w /src rust:1-alpine sh -euxc '
+            apk add --no-cache musl-dev curl file
+            cargo build --release --locked
+            file target/release/hottoh_api | grep -q "static"
+          '
+          cp target/release/hottoh_api hottoh_api
 
-      - name: Upload asset to release
-        uses: softprops/action-gh-release@v2
+      - uses: actions/upload-artifact@v4
         with:
-          files: ${{ matrix.asset_name }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: bin-linux-${{ matrix.arch }}
+          path: hottoh_api
+          if-no-files-found: error
 
-  create-release:
-    name: Create Release
-    runs-on: ubuntu-latest
-    needs: build-and-upload
+  other:
+    name: ${{ matrix.asset }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - runner: windows-latest
+            file: hottoh_api.exe
+            asset: hottoh_api-windows-amd64.exe
+          - runner: macos-latest
+            file: hottoh_api
+            asset: hottoh_api-macos-arm64
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Generate changelog
-        id: changelog
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release --locked
+      - name: Rename
+        shell: bash
+        run: cp "target/release/${{ matrix.file }}" "${{ matrix.asset }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bin-${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+          if-no-files-found: error
+
+  publish:
+    name: Packages and release
+    needs: [linux, other]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check version
+        id: version
         run: |
-          echo "Generating changelog for tag ${{ github.ref_name }}"
-          # You can customize this command to generate a changelog based on commits
-          # For example, using git log
-          echo "## Changelog for ${{ github.ref_name }}" > CHANGELOG.md
-          git log $(git describe --tags --abbrev=0 HEAD^)..HEAD --pretty=format:"* %s" >> CHANGELOG.md
-          cat CHANGELOG.md
-          
-      - name: Create Release
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: bin
+
+      - name: Install nFPM
+        run: |
+          curl -sSfL -o nfpm.tar.gz \
+            "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
+          echo "${NFPM_SHA256}  nfpm.tar.gz" | sha256sum -c -
+          sudo tar -xzf nfpm.tar.gz -C /usr/local/bin nfpm
+
+      - name: Build packages
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          for arch in amd64 arm64; do
+            chmod +x "bin/bin-linux-$arch/hottoh_api"
+            packaging/package.sh "$VERSION" "$arch" "bin/bin-linux-$arch/hottoh_api" dist
+          done
+          cp bin/bin-hottoh_api-windows-amd64.exe/* bin/bin-hottoh_api-macos-arm64/* dist/
+          (cd dist && sha256sum -- * > SHA256SUMS && cat SHA256SUMS)
+
+      - name: Test packages (amd64)
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          packaging/test-install.sh "dist/hottoh-api_${VERSION}_amd64.apk"
+          packaging/test-install.sh "dist/hottoh-api_${VERSION}_amd64.deb"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-files
+          path: dist/
+
+      - name: Release notes from CHANGELOG.md
+        if: github.ref_type == 'tag'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          awk -v v="$VERSION" '
+            $0 ~ "^## " { if (found) exit; if ($2 == v) { found = 1; next } }
+            found { print }
+          ' CHANGELOG.md > RELEASE_NOTES.md
+          if [ ! -s RELEASE_NOTES.md ]; then
+            echo "::error::no section for $VERSION in CHANGELOG.md"
+            exit 1
+          fi
+
+      - name: Publish release
+        if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
-          name: Release ${{ github.ref_name }}
-          body_path: CHANGELOG.md
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: hottoh_api ${{ github.ref_name }}
+          body_path: RELEASE_NOTES.md
+          files: dist/*
+          fail_on_unmatched_files: true

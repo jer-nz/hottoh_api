@@ -1,20 +1,20 @@
 [package]
 name = "hottoh_api"
-version = "0.1.0"
-edition = "2021"
+version = "2.0.0"
+edition = "2024"
+rust-version = "1.88"
+description = "HTTP API bridge for HottoH pellet stoves (Wifier 2.0 module, local TCP protocol)"
+license = "MIT"
+repository = "https://github.com/jer-nz/hottoh_api"
 
 [dependencies]
-crc-any = "2.5.0"
-thiserror = "2.0.12"
-actix-web = "4.10"
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.140"
-chrono = "0.4.40"
-ctrlc = "3.4.6"
-flexi_logger = "0.30.1"
-config = "0.15.11"
-log = "0.4.22"
-strum = "0.27"
-strum_macros = "0.27"
-utoipa = { version = "5.3.1", features = ["actix_extras", "preserve_order", "preserve_path_order"] }
-utoipa-swagger-ui = { version = "9", features = ["actix-web"] }
+thiserror = "2.0.20"
+actix-web = "4.15"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+chrono = "0.4.45"
+flexi_logger = { version = "0.31", features = ["compress"] }
+config = "0.15.25"
+log = "0.4.34"
+utoipa = { version = "5.5", features = ["actix_extras", "preserve_order", "preserve_path_order"] }
+utoipa-swagger-ui = { version = "9.0.2", features = ["actix-web"] }

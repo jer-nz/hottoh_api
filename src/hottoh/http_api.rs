@@ -1,64 +1,69 @@
-use crate::hottoh::config::AppConfig;
-use crate::hottoh::hottoh_const::{Command, CommandType, StoveCommands};
-use crate::hottoh::shared_struct::SharedState;
-use crate::hottoh::tcp_client_structs::Request;
-use actix_web::{middleware, web, App, HttpResponse, HttpServer, ResponseError};
-use log::{debug, error, info, warn};
-use serde::Deserialize;
+use crate::hottoh::config::HttpApiConfig;
+use crate::hottoh::hottoh_const::{ChronoMode, StoveCommands};
+use crate::hottoh::hottoh_structs::{DAT0Data, DAT1Data};
+use crate::hottoh::shared_struct::{Bridge, ConnectionStatus, MAX_PENDING_WRITES};
+use crate::hottoh::stats::{ProcessInfo, process_info};
+use actix_web::{App, HttpResponse, HttpServer, ResponseError, middleware, web};
+use log::{info, warn};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::VecDeque;
-use std::sync::{Arc, Mutex, RwLock};
+use std::ops::RangeInclusive;
+use std::sync::Arc;
 use thiserror::Error;
 use utoipa::{OpenApi, ToSchema};
 use utoipa_swagger_ui::SwaggerUi;
 
+/// Firmware limits for temperatures, in tenths of °C
+const FIRMWARE_TEMP_RANGE: RangeInclusive<i32> = 0..=9999;
+/// Firmware limits for the power level
+const FIRMWARE_POWER_RANGE: RangeInclusive<i32> = 0..=100;
+/// Firmware limits for fan speeds
+const FIRMWARE_FAN_RANGE: RangeInclusive<i32> = 0..=101;
+const TEMP_LABEL: &str = "temperature (tenths of °C)";
+
 /// API Error
 #[derive(Error, Debug)]
 pub enum ApiError {
-    /// Invalid parameter
     #[error("Invalid parameter: {0}")]
     InvalidParameter(String),
-
-    /// Internal error
-    #[error("Internal error: {0}")]
-    InternalError(String),
-
-    /// Lock error
-    #[error("Lock error: {0}")]
-    LockError(String),
+    #[error("Not found: {0}")]
+    NotFound(String),
+    #[error("Too many writes waiting for the stove ({0}), retry later")]
+    QueueFull(usize),
 }
 
 impl ResponseError for ApiError {
     fn error_response(&self) -> HttpResponse {
-        let error_json = json!({
-            "error": self.to_string()
-        });
-
+        let body = json!({ "success": false, "error": self.to_string() });
         match self {
             ApiError::InvalidParameter(_) => {
                 warn!("{}", self);
-                HttpResponse::BadRequest().json(error_json)
+                HttpResponse::BadRequest().json(body)
             }
-            ApiError::InternalError(_) => {
-                error!("{}", self);
-                HttpResponse::InternalServerError().json(error_json)
-            }
-            ApiError::LockError(_) => {
-                error!("{}", self);
-                HttpResponse::InternalServerError().json(error_json)
+            ApiError::NotFound(_) => HttpResponse::NotFound().json(body),
+            ApiError::QueueFull(_) => {
+                warn!("{}", self);
+                HttpResponse::ServiceUnavailable().json(body)
             }
         }
     }
 }
 
-/// API Documentation
+type Shared = web::Data<Bridge>;
+
+/// Stove setting and how to read its limits from a DAT page
+type Target<Page, Limits> = (StoveCommands, fn(&Page) -> Limits);
+
 #[derive(OpenApi)]
 #[openapi(
+    info(title = "HottoH API", version = env!("CARGO_PKG_VERSION")),
     paths(
         get_inf,
         get_dat0,
         get_dat1,
         get_dat2,
+        get_status,
+        get_request_status,
         post_on_off,
         post_eco_mode,
         post_ambiance_temp,
@@ -67,599 +72,573 @@ impl ResponseError for ApiError {
         post_fan_speed,
         post_power_level
     ),
-    components(
-        schemas(DatPostBool, DatPostU32, DatPostAmbianceTemp, DatPostFanSpeed, DatPostChronoTemp)
-    ),
-    tags(
-        (name = "hottoh", description = "Stove control API")
-    )
+    components(schemas(DatPostBool, DatPostU32, DatPostAmbianceTemp, DatPostFanSpeed, DatPostChronoTemp)),
+    tags((name = "hottoh", description = "Stove control API"))
 )]
 struct ApiDoc;
 
-/// Boolean parameters for commands
+/// Boolean parameter
 #[derive(Deserialize, ToSchema)]
 struct DatPostBool {
-    /// Boolean value (true/false)
-    ///
-    /// Example: `true` to activate, `false` to deactivate
-    #[schema(example = "true")]
+    #[schema(example = true)]
     value: bool,
 }
 
-/// Integer parameters for commands
+/// Integer parameter
 #[derive(Deserialize, ToSchema)]
 struct DatPostU32 {
-    /// Integer value
-    ///
-    /// Example: `5` for the power level
-    #[schema(example = "5")]
+    #[schema(example = 3)]
     value: u32,
 }
 
-/// Parameters for ambiance temperature
+/// Ambiance temperature
 #[derive(Deserialize, ToSchema)]
 struct DatPostAmbianceTemp {
     /// Ambiance number (1 or 2)
-    ///
-    /// Example: `1` for the first ambiance, `2` for the second
-    #[schema(example = "1")]
+    #[schema(example = 1)]
     ambiance: u32,
-    /// Temperature in degrees Celsius
-    ///
-    /// Example: `21.5` for 21.5°C
-    #[schema(example = "21.5")]
+    /// Temperature in °C (0.1 °C resolution)
+    #[schema(example = 21.5)]
     value: f32,
 }
 
-/// Parameters for fan speed
+/// Fan speed
 #[derive(Deserialize, ToSchema)]
 struct DatPostFanSpeed {
-    /// Fan number (1-3)
-    ///
-    /// Example: `1` for the first fan
-    #[schema(example = "1")]
+    /// Fan number (1 to 3)
+    #[schema(example = 1)]
     fan: u32,
-    /// Speed (0-5)
-    ///
-    /// Example: `3` for a medium speed
-    #[schema(example = "3")]
+    /// Speed, from 0 to the maximum reported by the stove (`index_fan_N_set_max`)
+    #[schema(example = 3)]
     value: u32,
 }
 
-/// Parameters for chrono temperature
+/// Chrono program temperature
 #[derive(Deserialize, ToSchema)]
 struct DatPostChronoTemp {
-    /// Chrono number (1-3)
-    ///
-    /// Example: `1` for the first chrono
-    #[schema(example = "1")]
+    /// Program number (1 to 3)
+    #[schema(example = 1)]
     chrono: u32,
-    /// Temperature in degrees Celsius
-    ///
-    /// Example: `20.0` for 20°C
-    #[schema(example = "20.0")]
+    /// Temperature in °C (0.1 °C resolution)
+    #[schema(example = 20.0)]
     value: f32,
 }
 
-/// Retrieves general information
-#[utoipa::path(
-    get,
-    path = "/api/inf",
-    responses(
-        (status = 200, description = "Information retrieved successfully"),
-        (status = 500, description = "Internal server error")
-    ),
-    tag = "hottoh"
-)]
-async fn get_inf(
-    data: web::Data<Arc<RwLock<SharedState>>>,
-) -> Result<web::Json<serde_json::Value>, ApiError> {
-    match data.read() {
-        Ok(state) => {
-            let inf_clone = state.get_inf().clone();
-            Ok(web::Json(json!(inf_clone)))
+/// `GET /api/status` body
+#[derive(Serialize)]
+struct StatusResponse<'a> {
+    #[serde(flatten)]
+    connection: &'a ConnectionStatus,
+    pending_writes: usize,
+    started_at: &'a str,
+    uptime_s: u64,
+    version: &'static str,
+    process: ProcessInfo,
+}
+
+/// Returns the stove range when it is known and consistent, the firmware range otherwise
+fn effective_range(
+    stove: Option<(i32, i32)>,
+    firmware: RangeInclusive<i32>,
+) -> RangeInclusive<i32> {
+    match stove {
+        Some((min, max)) if max > 0 && min <= max => {
+            min.max(*firmware.start())..=max.min(*firmware.end())
         }
-        Err(e) => Err(ApiError::LockError(format!(
-            "Failed to read shared state: {}",
-            e
-        ))),
+        _ => firmware,
     }
 }
 
-/// Retrieves DAT0 data
-#[utoipa::path(
-    get,
-    path = "/api/dat/0",
-    responses(
-        (status = 200, description = "DAT0 data retrieved successfully"),
-        (status = 500, description = "Internal server error")
-    ),
-    tag = "hottoh"
-)]
-async fn get_dat0(
-    data: web::Data<Arc<RwLock<SharedState>>>,
-) -> Result<web::Json<serde_json::Value>, ApiError> {
-    match data.read() {
-        Ok(state) => {
-            let dat0_clone = state.get_dat0().clone();
-            Ok(web::Json(json!(dat0_clone)))
-        }
-        Err(e) => Err(ApiError::LockError(format!(
-            "Failed to read shared state: {}",
-            e
-        ))),
+fn check_range(name: &str, value: i32, range: &RangeInclusive<i32>) -> Result<(), ApiError> {
+    if range.contains(&value) {
+        Ok(())
+    } else {
+        Err(ApiError::InvalidParameter(format!(
+            "{} must be between {} and {} (got {})",
+            name,
+            range.start(),
+            range.end(),
+            value
+        )))
     }
 }
 
-/// Retrieves DAT1 data
-#[utoipa::path(
-    get,
-    path = "/api/dat/1",
-    responses(
-        (status = 200, description = "DAT1 data retrieved successfully"),
-        (status = 500, description = "Internal server error")
-    ),
-    tag = "hottoh"
-)]
-async fn get_dat1(
-    data: web::Data<Arc<RwLock<SharedState>>>,
-) -> Result<web::Json<serde_json::Value>, ApiError> {
-    match data.read() {
-        Ok(state) => {
-            let dat1_clone = state.get_dat1().clone();
-            Ok(web::Json(json!(dat1_clone)))
-        }
-        Err(e) => Err(ApiError::LockError(format!(
-            "Failed to read shared state: {}",
-            e
-        ))),
+fn tenths(value: f32) -> i32 {
+    (value * 10.0).round() as i32
+}
+
+/// Converts °C to the tenths sent to the stove
+fn to_tenths(value: f32) -> Result<i32, ApiError> {
+    if value.is_finite() {
+        Ok(tenths(value))
+    } else {
+        Err(ApiError::InvalidParameter(
+            "temperature must be a finite number".into(),
+        ))
     }
 }
 
-/// Retrieves DAT2 data
-#[utoipa::path(
-    get,
-    path = "/api/dat/2",
-    responses(
-        (status = 200, description = "DAT2 data retrieved successfully"),
-        (status = 500, description = "Internal server error")
-    ),
-    tag = "hottoh"
-)]
-async fn get_dat2(
-    data: web::Data<Arc<RwLock<SharedState>>>,
-) -> Result<web::Json<serde_json::Value>, ApiError> {
-    match data.read() {
-        Ok(state) => {
-            let dat2_clone = state.get_dat2().clone();
-            Ok(web::Json(json!(dat2_clone)))
-        }
-        Err(e) => Err(ApiError::LockError(format!(
-            "Failed to read shared state: {}",
-            e
-        ))),
-    }
+/// Stove limits in tenths of °C
+fn tenths_range((min, max): (f32, f32)) -> (i32, i32) {
+    (tenths(min), tenths(max))
 }
 
-/// Turns the stove on or off
-///
-/// Request example:
-/// ```json
-/// {
-///   "value": true
-/// }
-/// ```
-/// - `true`: Turns the stove on
-/// - `false`: Turns the stove off
-#[utoipa::path(
-    post,
-    path = "/api/dat/set_on_off",
-    request_body = DatPostBool,
-    responses(
-        (status = 200, description = "Stove turned on or off successfully"),
-        (status = 500, description = "Internal server error")
-    ),
-    tag = "hottoh"
-)]
-async fn post_on_off(
-    request: web::Json<DatPostBool>,
-    request_queue: web::Data<Arc<RwLock<VecDeque<Request>>>>,
-    request_id_counter: web::Data<Arc<Mutex<u32>>>,
+/// Selects the entry for a 1-based number (ambiance, chrono program, fan)
+fn pick<T: Copy>(name: &str, number: u32, choices: &[T]) -> Result<T, ApiError> {
+    usize::try_from(number)
+        .ok()
+        .and_then(|n| n.checked_sub(1))
+        .and_then(|index| choices.get(index))
+        .copied()
+        .ok_or_else(|| {
+            ApiError::InvalidParameter(format!(
+                "{} must be between 1 and {} (got {})",
+                name,
+                choices.len(),
+                number
+            ))
+        })
+}
+
+/// Checks the value against the stove range (the firmware range until the stove has answered),
+/// then queues the write. The outcome is available on `/api/request/{id}`.
+fn queue_write(
+    bridge: &Bridge,
+    command: StoveCommands,
+    label: &str,
+    value: i32,
+    stove_range: Option<(i32, i32)>,
+    firmware_range: RangeInclusive<i32>,
 ) -> Result<HttpResponse, ApiError> {
-    let value = if request.value { 1 } else { 0 };
-    handle_request(
-        request_queue,
-        request_id_counter,
-        StoveCommands::OnOff as u32,
+    check_range(label, value, &effective_range(stove_range, firmware_range))?;
+    let request_id = bridge
+        .queue_write(command, value)
+        .ok_or(ApiError::QueueFull(MAX_PENDING_WRITES))?;
+    let message = format!(
+        "Request added for command: {}, value: {}, id: {}",
+        command.name(),
         value,
-    )
-    .await
+        request_id
+    );
+    info!("{}", message);
+    Ok(HttpResponse::Ok().json(json!({
+        "success": true,
+        "message": message,
+        "request_id": request_id,
+        "status_url": format!("/api/request/{}", request_id),
+    })))
+}
+
+/// Module information
+#[utoipa::path(get, path = "/api/inf", responses((status = 200)), tag = "hottoh")]
+async fn get_inf(bridge: Shared) -> HttpResponse {
+    HttpResponse::Ok().json(bridge.state().get_inf())
+}
+
+/// DAT page 0: main stove data
+#[utoipa::path(get, path = "/api/dat/0", responses((status = 200)), tag = "hottoh")]
+async fn get_dat0(bridge: Shared) -> HttpResponse {
+    HttpResponse::Ok().json(bridge.state().get_dat0())
+}
+
+/// DAT page 1: chrono programs
+#[utoipa::path(get, path = "/api/dat/1", responses((status = 200)), tag = "hottoh")]
+async fn get_dat1(bridge: Shared) -> HttpResponse {
+    HttpResponse::Ok().json(bridge.state().get_dat1())
+}
+
+/// DAT page 2: hydraulic data and actual fan speeds
+#[utoipa::path(get, path = "/api/dat/2", responses((status = 200)), tag = "hottoh")]
+async fn get_dat2(bridge: Shared) -> HttpResponse {
+    HttpResponse::Ok().json(bridge.state().get_dat2())
+}
+
+/// Connection with the stove, counters since start and process resources
+#[utoipa::path(get, path = "/api/status", responses((status = 200)), tag = "hottoh")]
+async fn get_status(bridge: Shared) -> HttpResponse {
+    let pending_writes = bridge.writes().len();
+    let state = bridge.state();
+    HttpResponse::Ok().json(StatusResponse {
+        connection: state.connection(),
+        pending_writes,
+        started_at: bridge.started_at(),
+        uptime_s: bridge.uptime().as_secs(),
+        version: env!("CARGO_PKG_VERSION"),
+        process: process_info(),
+    })
+}
+
+/// Outcome of a write request: pending, sent, ok, error (with the stove error code) or timeout
+#[utoipa::path(
+    get,
+    path = "/api/request/{id}",
+    params(("id" = u32, Path, description = "request_id returned by a POST")),
+    responses((status = 200), (status = 404, description = "Unknown or expired request")),
+    tag = "hottoh"
+)]
+async fn get_request_status(bridge: Shared, id: web::Path<u32>) -> Result<HttpResponse, ApiError> {
+    let id = id.into_inner();
+    bridge
+        .state()
+        .get_request(id)
+        .map(|status| HttpResponse::Ok().json(status))
+        .ok_or_else(|| ApiError::NotFound(format!("request {}", id)))
+}
+
+/// Turns the stove on (`true`) or off (`false`)
+#[utoipa::path(post, path = "/api/dat/set_on_off", request_body = DatPostBool,
+    responses((status = 200), (status = 400), (status = 503)), tag = "hottoh")]
+async fn post_on_off(
+    body: web::Json<DatPostBool>,
+    bridge: Shared,
+) -> Result<HttpResponse, ApiError> {
+    let value = i32::from(body.value);
+    queue_write(&bridge, StoveCommands::OnOff, "value", value, None, 0..=1)
 }
 
 /// Activates or deactivates eco mode
-///
-/// Request example:
-/// ```json
-/// {
-///   "value": true
-/// }
-/// ```
-/// - `true`: Activates eco mode (energy saving)
-/// - `false`: Deactivates eco mode
-#[utoipa::path(
-    post,
-    path = "/api/dat/set_eco_mode",
-    request_body = DatPostBool,
-    responses(
-        (status = 200, description = "Eco mode set successfully"),
-        (status = 500, description = "Internal server error")
-    ),
-    tag = "hottoh"
-)]
+#[utoipa::path(post, path = "/api/dat/set_eco_mode", request_body = DatPostBool,
+    responses((status = 200), (status = 400), (status = 503)), tag = "hottoh")]
 async fn post_eco_mode(
-    request: web::Json<DatPostBool>,
-    request_queue: web::Data<Arc<RwLock<VecDeque<Request>>>>,
-    request_id_counter: web::Data<Arc<Mutex<u32>>>,
+    body: web::Json<DatPostBool>,
+    bridge: Shared,
 ) -> Result<HttpResponse, ApiError> {
-    let value = if request.value { 1 } else { 0 };
-    handle_request(
-        request_queue,
-        request_id_counter,
-        StoveCommands::EcoMode as u32,
-        value,
-    )
-    .await
+    let value = i32::from(body.value);
+    queue_write(&bridge, StoveCommands::EcoMode, "value", value, None, 0..=1)
 }
 
-/// Sets the ambiance temperature
-///
-/// Request example:
-/// ```json
-/// {
-///   "ambiance": 1,
-///   "value": 21.5
-/// }
-/// ```
-/// - `ambiance`: Ambiance number (1 or 2)
-/// - `value`: Temperature in degrees Celsius (ex: 21.5 for 21.5°C)
-#[utoipa::path(
-    post,
-    path = "/api/dat/set_ambiance_temp",
-    request_body = DatPostAmbianceTemp,
-    responses(
-        (status = 200, description = "Ambiance temperature set successfully"),
-        (status = 400, description = "Invalid parameters"),
-        (status = 500, description = "Internal server error")
-    ),
-    tag = "hottoh"
-)]
+/// Sets the ambiance temperature set point (°C), within the range reported by the stove
+#[utoipa::path(post, path = "/api/dat/set_ambiance_temp", request_body = DatPostAmbianceTemp,
+    responses((status = 200), (status = 400), (status = 503)), tag = "hottoh")]
 async fn post_ambiance_temp(
-    request: web::Json<DatPostAmbianceTemp>,
-    request_queue: web::Data<Arc<RwLock<VecDeque<Request>>>>,
-    request_id_counter: web::Data<Arc<Mutex<u32>>>,
+    body: web::Json<DatPostAmbianceTemp>,
+    bridge: Shared,
 ) -> Result<HttpResponse, ApiError> {
-    // Validation
-    if request.value.is_nan() || request.value.is_infinite() {
-        return Err(ApiError::InvalidParameter(
-            "Temperature cannot be NaN or infinite".into(),
-        ));
-    }
-
-    let command = match request.ambiance {
-        1 => StoveCommands::AmbianceTemperature1,
-        2 => StoveCommands::AmbianceTemperature2,
-        _ => {
-            return Err(ApiError::InvalidParameter(
-                "Ambiance number must be 1 or 2".into(),
-            ))
-        }
-    };
-
-    handle_request(
-        request_queue,
-        request_id_counter,
-        command as u32,
-        (request.value * 10.0) as i32,
+    let choices: [Target<DAT0Data, (f32, f32)>; 2] = [
+        (StoveCommands::AmbianceTemperature1, |d| {
+            (d.index_ambient_t1_set_min, d.index_ambient_t1_set_max)
+        }),
+        (StoveCommands::AmbianceTemperature2, |d| {
+            (d.index_ambient_t2_set_min, d.index_ambient_t2_set_max)
+        }),
+    ];
+    let (command, limits) = pick("ambiance", body.ambiance, &choices)?;
+    let value = to_tenths(body.value)?;
+    let stove_range = bridge
+        .state()
+        .dat0_if_received()
+        .map(|d| tenths_range(limits(d)));
+    queue_write(
+        &bridge,
+        command,
+        TEMP_LABEL,
+        value,
+        stove_range,
+        FIRMWARE_TEMP_RANGE,
     )
-    .await
 }
 
-/// Activates or deactivates chrono mode
-///
-/// Request example:
-/// ```json
-/// {
-///   "value": true
-/// }
-/// ```
-/// - `true`: Activates chrono mode (schedule programming)
-/// - `false`: Deactivates chrono mode
-#[utoipa::path(
-    post,
-    path = "/api/dat/set_chrono_mode",
-    request_body = DatPostBool,
-    responses(
-        (status = 200, description = "Chrono mode set successfully"),
-        (status = 500, description = "Internal server error")
-    ),
-    tag = "hottoh"
-)]
+/// Activates (`true`) or deactivates (`false`) chrono mode
+#[utoipa::path(post, path = "/api/dat/set_chrono_mode", request_body = DatPostBool,
+    responses((status = 200), (status = 400), (status = 503)), tag = "hottoh")]
 async fn post_chrono_mode(
-    request: web::Json<DatPostBool>,
-    request_queue: web::Data<Arc<RwLock<VecDeque<Request>>>>,
-    request_id_counter: web::Data<Arc<Mutex<u32>>>,
+    body: web::Json<DatPostBool>,
+    bridge: Shared,
 ) -> Result<HttpResponse, ApiError> {
-    handle_request(
-        request_queue,
-        request_id_counter,
-        StoveCommands::ChronoOnOff as u32,
-        request.value,
+    // The firmware expects 0 (manual) or 2 (chrono); 1 is refused with ERR;17.
+    let value = ChronoMode::from_enabled(body.value) as i32;
+    queue_write(
+        &bridge,
+        StoveCommands::ChronoOnOff,
+        "value",
+        value,
+        None,
+        0..=2,
     )
-    .await
 }
 
-/// Sets the chrono temperature
-///
-/// Request example:
-/// ```json
-/// {
-///   "chrono": 1,
-///   "value": 20.0
-/// }
-/// ```
-/// - `chrono`: Chrono number (1, 2 or 3)
-/// - `value`: Temperature in degrees Celsius (ex: 20.0 for 20°C)
-#[utoipa::path(
-    post,
-    path = "/api/dat/set_chrono_temp",
-    request_body = DatPostChronoTemp,
-    responses(
-        (status = 200, description = "Chrono temperature set successfully"),
-        (status = 400, description = "Invalid parameters"),
-        (status = 500, description = "Internal server error")
-    ),
-    tag = "hottoh"
-)]
+/// Sets the temperature of a chrono program (°C), within the range reported by the stove
+#[utoipa::path(post, path = "/api/dat/set_chrono_temp", request_body = DatPostChronoTemp,
+    responses((status = 200), (status = 400), (status = 503)), tag = "hottoh")]
 async fn post_chrono_temp(
-    request: web::Json<DatPostChronoTemp>,
-    request_queue: web::Data<Arc<RwLock<VecDeque<Request>>>>,
-    request_id_counter: web::Data<Arc<Mutex<u32>>>,
+    body: web::Json<DatPostChronoTemp>,
+    bridge: Shared,
 ) -> Result<HttpResponse, ApiError> {
-    // Validation
-    if request.value.is_nan() || request.value.is_infinite() {
-        return Err(ApiError::InvalidParameter(
-            "Temperature cannot be NaN or infinite".into(),
-        ));
-    }
-
-    let command = match request.chrono {
-        1 => StoveCommands::ChronoTemperature1,
-        2 => StoveCommands::ChronoTemperature2,
-        3 => StoveCommands::ChronoTemperature3,
-        _ => {
-            return Err(ApiError::InvalidParameter(
-                "Chrono number must be between 1 and 3".into(),
-            ))
-        }
-    };
-
-    handle_request(
-        request_queue,
-        request_id_counter,
-        command as u32,
-        (request.value * 10.0) as i32,
+    let choices: [Target<DAT1Data, (f32, f32)>; 3] = [
+        (StoveCommands::ChronoTemperature1, |d| {
+            (d.index_program_1_temp_min, d.index_program_1_temp_max)
+        }),
+        (StoveCommands::ChronoTemperature2, |d| {
+            (d.index_program_2_temp_min, d.index_program_2_temp_max)
+        }),
+        (StoveCommands::ChronoTemperature3, |d| {
+            (d.index_program_3_temp_min, d.index_program_3_temp_max)
+        }),
+    ];
+    let (command, limits) = pick("chrono", body.chrono, &choices)?;
+    let value = to_tenths(body.value)?;
+    let stove_range = bridge
+        .state()
+        .dat1_if_received()
+        .map(|d| tenths_range(limits(d)));
+    queue_write(
+        &bridge,
+        command,
+        TEMP_LABEL,
+        value,
+        stove_range,
+        FIRMWARE_TEMP_RANGE,
     )
-    .await
 }
 
-/// Sets the fan speed
-///
-/// Request example:
-/// ```json
-/// {
-///   "fan": 1,
-///   "value": 3
-/// }
-/// ```
-/// - `fan`: Fan number (1, 2 or 3)
-/// - `value`: Speed (0 to 5, where 0 = off and 5 = maximum speed)
-#[utoipa::path(
-    post,
-    path = "/api/dat/set_fan_speed",
-    request_body = DatPostFanSpeed,
-    responses(
-        (status = 200, description = "Fan speed set successfully"),
-        (status = 400, description = "Invalid parameters"),
-        (status = 500, description = "Internal server error")
-    ),
-    tag = "hottoh"
-)]
+/// Sets a fan speed, from 0 to the maximum reported by the stove
+#[utoipa::path(post, path = "/api/dat/set_fan_speed", request_body = DatPostFanSpeed,
+    responses((status = 200), (status = 400), (status = 503)), tag = "hottoh")]
 async fn post_fan_speed(
-    request: web::Json<DatPostFanSpeed>,
-    request_queue: web::Data<Arc<RwLock<VecDeque<Request>>>>,
-    request_id_counter: web::Data<Arc<Mutex<u32>>>,
+    body: web::Json<DatPostFanSpeed>,
+    bridge: Shared,
 ) -> Result<HttpResponse, ApiError> {
-    // Validation
-    if request.value > 5 {
-        return Err(ApiError::InvalidParameter(
-            "Fan speed must be between 0 and 5".into(),
-        ));
-    }
-
-    let command = match request.fan {
-        1 => StoveCommands::FanSpeed1,
-        2 => StoveCommands::FanSpeed2,
-        3 => StoveCommands::FanSpeed3,
-        _ => {
-            return Err(ApiError::InvalidParameter(
-                "Fan number must be between 1 and 3".into(),
-            ))
-        }
-    };
-
-    handle_request(
-        request_queue,
-        request_id_counter,
-        command as u32,
-        request.value,
+    let choices: [Target<DAT0Data, u16>; 3] = [
+        (StoveCommands::FanSpeed1, |d| d.index_fan_1_set_max),
+        (StoveCommands::FanSpeed2, |d| d.index_fan_2_set_max),
+        (StoveCommands::FanSpeed3, |d| d.index_fan_3_set_max),
+    ];
+    let (command, max) = pick("fan", body.fan, &choices)?;
+    let value = i32::try_from(body.value).unwrap_or(i32::MAX);
+    let stove_range = bridge
+        .state()
+        .dat0_if_received()
+        .map(|d| (0, i32::from(max(d))));
+    queue_write(
+        &bridge,
+        command,
+        "fan speed",
+        value,
+        stove_range,
+        FIRMWARE_FAN_RANGE,
     )
-    .await
 }
 
-/// Sets the power level
-///
-/// Request example:
-/// ```json
-/// {
-///   "value": 5
-/// }
-/// ```
-/// - `value`: Power level (0 to 10, where 0 = minimum and 10 = maximum)
-#[utoipa::path(
-    post,
-    path = "/api/dat/set_power_level",
-    request_body = DatPostU32,
-    responses(
-        (status = 200, description = "Power level set successfully"),
-        (status = 400, description = "Invalid parameters"),
-        (status = 500, description = "Internal server error")
-    ),
-    tag = "hottoh"
-)]
+/// Sets the power level, within the range reported by the stove
+#[utoipa::path(post, path = "/api/dat/set_power_level", request_body = DatPostU32,
+    responses((status = 200), (status = 400), (status = 503)), tag = "hottoh")]
 async fn post_power_level(
-    request: web::Json<DatPostU32>,
-    request_queue: web::Data<Arc<RwLock<VecDeque<Request>>>>,
-    request_id_counter: web::Data<Arc<Mutex<u32>>>,
+    body: web::Json<DatPostU32>,
+    bridge: Shared,
 ) -> Result<HttpResponse, ApiError> {
-    // Validation
-    if request.value > 10 {
-        return Err(ApiError::InvalidParameter(
-            "Power level must be between 0 and 10".into(),
-        ));
-    }
-
-    handle_request(
-        request_queue,
-        request_id_counter,
-        StoveCommands::PowerLevel as u32,
-        request.value,
+    let value = i32::try_from(body.value).unwrap_or(i32::MAX);
+    let stove_range = bridge
+        .state()
+        .dat0_if_received()
+        .map(|d| (i32::from(d.index_power_min), i32::from(d.index_power_max)));
+    queue_write(
+        &bridge,
+        StoveCommands::PowerLevel,
+        "power level",
+        value,
+        stove_range,
+        FIRMWARE_POWER_RANGE,
     )
-    .await
 }
 
-/// Starts the HTTP server
-pub async fn start_http_server(
-    request_queue: Arc<RwLock<VecDeque<Request>>>,
-    shared_state: Arc<RwLock<SharedState>>,
-    request_id_counter: Arc<Mutex<u32>>,
-    config: Arc<RwLock<AppConfig>>,
-) -> std::io::Result<()> {
-    // Extract necessary information from the config and release the lock
-    // before asynchronous operations
-    let http_address = {
-        let cfg = config.read().expect("Cannot read config in http thread.");
-        format!("{}:{}", cfg.http_api.ip, cfg.http_api.port)
-    };
+/// Routes, JSON error handling and Swagger UI
+fn configure(cfg: &mut web::ServiceConfig) {
+    cfg.app_data(web::JsonConfig::default().error_handler(|err, _req| {
+        let message = err.to_string();
+        warn!("Invalid JSON body: {}", message);
+        actix_web::error::InternalError::from_response(
+            err,
+            HttpResponse::BadRequest().json(json!({ "success": false, "error": message })),
+        )
+        .into()
+    }))
+    .service(SwaggerUi::new("/swagger-ui/{_:.*}").url("/api-docs/openapi.json", ApiDoc::openapi()))
+    .route("/api/inf", web::get().to(get_inf))
+    .route("/api/dat/0", web::get().to(get_dat0))
+    .route("/api/dat/1", web::get().to(get_dat1))
+    .route("/api/dat/2", web::get().to(get_dat2))
+    .route("/api/status", web::get().to(get_status))
+    .route("/api/request/{id}", web::get().to(get_request_status))
+    .route("/api/dat/set_on_off", web::post().to(post_on_off))
+    .route("/api/dat/set_eco_mode", web::post().to(post_eco_mode))
+    .route(
+        "/api/dat/set_ambiance_temp",
+        web::post().to(post_ambiance_temp),
+    )
+    .route("/api/dat/set_chrono_mode", web::post().to(post_chrono_mode))
+    .route("/api/dat/set_chrono_temp", web::post().to(post_chrono_temp))
+    .route("/api/dat/set_fan_speed", web::post().to(post_fan_speed))
+    .route("/api/dat/set_power_level", web::post().to(post_power_level));
+}
 
+/// Runs the HTTP server until SIGINT or SIGTERM (handled by actix-web)
+pub async fn start_http_server(config: &HttpApiConfig, bridge: Arc<Bridge>) -> std::io::Result<()> {
+    let http_address = format!("{}:{}", config.ip, config.port);
     info!("Starting HTTP server on {}", http_address);
-
+    let data = web::Data::from(bridge);
     HttpServer::new(move || {
         App::new()
             .wrap(middleware::Logger::default())
             .wrap(middleware::Compress::default())
-            .app_data(web::Data::new(request_queue.clone()))
-            .app_data(web::Data::new(shared_state.clone()))
-            .app_data(web::Data::new(request_id_counter.clone()))
-            .service(
-                SwaggerUi::new("/swagger-ui/{_:.*}")
-                    .url("/api-docs/openapi.json", ApiDoc::openapi()),
-            )
-            .route("/api/inf", web::get().to(get_inf))
-            .route("/api/dat/0", web::get().to(get_dat0))
-            .route("/api/dat/1", web::get().to(get_dat1))
-            .route("/api/dat/2", web::get().to(get_dat2))
-            .route("/api/dat/set_on_off", web::post().to(post_on_off))
-            .route("/api/dat/set_eco_mode", web::post().to(post_eco_mode))
-            .route(
-                "/api/dat/set_ambiance_temp",
-                web::post().to(post_ambiance_temp),
-            )
-            .route("/api/dat/set_chrono_mode", web::post().to(post_chrono_mode))
-            .route("/api/dat/set_chrono_temp", web::post().to(post_chrono_temp))
-            .route("/api/dat/set_fan_speed", web::post().to(post_fan_speed))
-            .route("/api/dat/set_power_level", web::post().to(post_power_level))
+            .app_data(data.clone())
+            .configure(configure)
     })
+    .shutdown_timeout(5)
     .bind(&http_address)?
     .run()
     .await
 }
 
-/// Handles a request and adds it to the queue
-async fn handle_request(
-    request_queue: web::Data<Arc<RwLock<VecDeque<Request>>>>,
-    request_id_counter: web::Data<Arc<Mutex<u32>>>,
-    action: u32,
-    value: impl ToString,
-) -> Result<HttpResponse, ApiError> {
-    let mut id_lock = match request_id_counter.lock() {
-        Ok(lock) => lock,
-        Err(e) => {
-            error!("Failed to lock request ID counter: {}", e);
-            return Err(ApiError::InternalError(
-                "Failed to lock request ID counter".into(),
-            ));
-        }
-    };
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hottoh::shared_struct::RequestState;
+    use actix_web::http::StatusCode;
+    use actix_web::test as atest;
+    use serde_json::Value;
 
-    let request_id = *id_lock;
-    let new_request = Request::new(
-        request_id,
-        Command::Dat,
-        CommandType::Write,
-        vec![action.to_string(), value.to_string()],
-    );
+    #[test]
+    fn stove_range_is_used_when_known() {
+        assert_eq!(effective_range(Some((1, 5)), FIRMWARE_POWER_RANGE), 1..=5);
+        assert_eq!(effective_range(None, FIRMWARE_POWER_RANGE), 0..=100);
+        // Default (never received) or inconsistent values fall back to the firmware range
+        assert_eq!(effective_range(Some((0, 0)), FIRMWARE_FAN_RANGE), 0..=101);
+        assert_eq!(effective_range(Some((9, 3)), FIRMWARE_FAN_RANGE), 0..=101);
+        // Negative minimum is clamped: the firmware refuses negative temperatures
+        assert_eq!(
+            effective_range(Some((-50, 300)), FIRMWARE_TEMP_RANGE),
+            0..=300
+        );
+    }
 
-    match request_queue.write() {
-        Ok(mut queue) => {
-            queue.push_back(new_request);
-            *id_lock = (*id_lock + 1) % 100000;
-            // Convert the action to StoveCommands to get the command name
-            let command_name = match action {
-                0 => "OnOff",
-                1 => "EcoMode",
-                2 => "PowerLevel",
-                3 => "AmbianceTemperature1",
-                4 => "AmbianceTemperature2",
-                5 => "FanSpeed1",
-                6 => "FanSpeed2",
-                7 => "FanSpeed3",
-                8 => "ChronoOnOff",
-                9 => "ChronoTemperature1",
-                10 => "ChronoTemperature2",
-                11 => "ChronoTemperature3",
-                12 => "SanTemperature",
-                13 => "PufTemperature",
-                14 => "BoilerTemperature",
-                15 => "HottohSetRecipe",
-                16 => "HottohSetPelSetpoint",
-                _ => "Unknown",
-            };
+    #[test]
+    fn temperatures_are_rounded_to_tenths() {
+        assert_eq!(to_tenths(21.3).unwrap(), 213);
+        assert_eq!(to_tenths(21.25).unwrap(), 213);
+        assert_eq!(to_tenths(19.94).unwrap(), 199);
+        assert!(to_tenths(f32::NAN).is_err());
+    }
 
-            debug!(
-                "Request added for command: {}, value: {}, id: {}",
-                command_name,
-                value.to_string(),
-                request_id
-            );
-            Ok(HttpResponse::Ok().json(json!({
-                "success": true,
-                "message": format!("Request added for command: {}, value: {}, id: {}", command_name, value.to_string(), request_id),
-                "request_id": request_id
-            })))
+    #[test]
+    fn pick_is_one_based() {
+        let choices = ['a', 'b'];
+        assert_eq!(pick("x", 1, &choices).unwrap(), 'a');
+        assert_eq!(pick("x", 2, &choices).unwrap(), 'b');
+        assert!(pick("x", 0, &choices).is_err());
+        assert!(pick("x", 3, &choices).is_err());
+    }
+
+    /// Bridge whose stove has already sent DAT0 (power 1..=5, fans up to 5)
+    fn bridge_with_dat0() -> Arc<Bridge> {
+        let bridge = Arc::new(Bridge::new());
+        let raw = "0;9;0;1;33;8;1;0;2;215;220;50;300;-15;0;0;0;0;0;0;0;1450;\
+                   3;3;1;5;1200;3;3;5;0;0;0;0;0;0";
+        let fields: Vec<String> = raw.split(';').map(str::to_string).collect();
+        bridge
+            .state_mut()
+            .set_dat0(DAT0Data::from_slice(&fields).unwrap());
+        bridge
+    }
+
+    async fn call(bridge: &Arc<Bridge>, request: atest::TestRequest) -> (StatusCode, Value) {
+        let app = atest::init_service(
+            App::new()
+                .app_data(web::Data::from(Arc::clone(bridge)))
+                .configure(configure),
+        )
+        .await;
+        let response = atest::call_service(&app, request.to_request()).await;
+        let status = response.status();
+        (status, atest::read_body_json(response).await)
+    }
+
+    async fn post(bridge: &Arc<Bridge>, path: &str, body: Value) -> (StatusCode, Value) {
+        call(bridge, atest::TestRequest::post().uri(path).set_json(body)).await
+    }
+
+    #[actix_web::test]
+    async fn write_is_queued_and_tracked() {
+        let bridge = bridge_with_dat0();
+        let (status, body) = post(&bridge, "/api/dat/set_power_level", json!({"value": 3})).await;
+        assert_eq!(status, StatusCode::OK);
+        let id = body["request_id"].as_u64().unwrap();
+        assert_eq!(bridge.writes()[0].request.get_params(), ["2", "3"]);
+
+        let (status, body) = call(
+            &bridge,
+            atest::TestRequest::get().uri(&format!("/api/request/{}", id)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["status"], "pending");
+        assert_eq!(
+            bridge.state().get_request(id as u32).unwrap().status,
+            RequestState::Pending
+        );
+    }
+
+    #[actix_web::test]
+    async fn invalid_writes_are_refused_before_the_queue() {
+        let bridge = bridge_with_dat0();
+        for (path, body) in [
+            ("/api/dat/set_power_level", json!({"value": 6})),
+            ("/api/dat/set_fan_speed", json!({"fan": 4, "value": 1})),
+            ("/api/dat/set_fan_speed", json!({"fan": 1, "value": 6})),
+            (
+                "/api/dat/set_ambiance_temp",
+                json!({"ambiance": 1, "value": 30.1}),
+            ),
+            (
+                "/api/dat/set_ambiance_temp",
+                json!({"ambiance": 3, "value": 20}),
+            ),
+            (
+                "/api/dat/set_chrono_temp",
+                json!({"chrono": 0, "value": 20}),
+            ),
+            ("/api/dat/set_power_level", json!({"value": -1})),
+            ("/api/dat/set_on_off", json!({"value": "yes"})),
+            ("/api/dat/set_eco_mode", json!({})),
+        ] {
+            let (status, response) = post(&bridge, path, body.clone()).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{} {}", path, body);
+            assert_eq!(response["success"], false);
         }
-        Err(e) => {
-            error!("Failed to lock request queue: {}", e);
-            Err(ApiError::LockError("Failed to lock request queue".into()))
+        assert!(bridge.writes().is_empty());
+    }
+
+    #[actix_web::test]
+    async fn chrono_mode_sends_firmware_values() {
+        let bridge = Arc::new(Bridge::new());
+        post(&bridge, "/api/dat/set_chrono_mode", json!({"value": true})).await;
+        post(&bridge, "/api/dat/set_chrono_mode", json!({"value": false})).await;
+        let writes = bridge.writes();
+        assert_eq!(writes[0].request.get_params(), ["8", "2"]);
+        assert_eq!(writes[1].request.get_params(), ["8", "0"]);
+    }
+
+    #[actix_web::test]
+    async fn full_queue_answers_503() {
+        let bridge = Arc::new(Bridge::new());
+        for _ in 0..MAX_PENDING_WRITES {
+            bridge.queue_write(StoveCommands::EcoMode, 1).unwrap();
         }
+        let (status, body) = post(&bridge, "/api/dat/set_eco_mode", json!({"value": true})).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body["success"], false);
+    }
+
+    #[actix_web::test]
+    async fn status_and_unknown_request() {
+        let bridge = Arc::new(Bridge::new());
+        let (status, body) = call(&bridge, atest::TestRequest::get().uri("/api/status")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["connected"], false);
+        assert_eq!(body["pending_writes"], 0);
+        assert!(body["stats"]["timeouts"].is_u64());
+        assert!(body["uptime_s"].is_u64());
+
+        let (status, _) = call(&bridge, atest::TestRequest::get().uri("/api/request/42")).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
     }
 }

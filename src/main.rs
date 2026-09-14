@@ -1,82 +1,71 @@
 mod hottoh;
-use crate::hottoh::http_api::start_http_server;
-use crate::hottoh::shared_struct::SharedState;
-use hottoh::config::load_config;
-use hottoh::logger::initialize_logger;
-use hottoh::tcp_client::TcpClient;
-use hottoh::tcp_client_structs::{Request, Response};
-use log::info;
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
 
-use actix_web::rt::System;
+use hottoh::config::load_config;
+use hottoh::http_api::start_http_server;
+use hottoh::logger::{initialize_logger, log_panics};
+use hottoh::shared_struct::Bridge;
+use hottoh::stats::spawn_reporter;
+use hottoh::tcp_client::TcpClient;
+use log::{error, info};
+use std::sync::Arc;
+use std::time::Duration;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    let args: Vec<String> = std::env::args().collect();
-    let config_path = args.get(1).map(|s| s.as_str());
-    // Load configuration
-    let config = match load_config(config_path) {
-        Ok(config) => {
-            println!("Configuration loaded successfully!");
-            println!(
-                "Stove IP: {}, Stove Port: {}",
-                config.stove.ip, config.stove.port
-            );
-            println!("HTTP API Port: {}", config.http_api.port);
-            Arc::new(RwLock::new(config))
-        }
+    let config_path = std::env::args().nth(1);
+    let config = match load_config(config_path.as_deref()) {
+        Ok(config) => config,
         Err(e) => {
             eprintln!("Failed to load configuration: {}", e);
             std::process::exit(1);
         }
     };
-    initialize_logger(Arc::clone(&config)).expect("Failed to initialize logger");
-    info!("Starting...");
-    let running = Arc::new(AtomicBool::new(true));
-    ctrlc::set_handler({
-        let running = Arc::clone(&running);
-        move || {
-            info!("Ctrl-C received! Exiting...");
-            running.store(false, Ordering::SeqCst);
-            // Stop the Actix system
-            System::current().stop();
+    let _logger = match initialize_logger(&config.log) {
+        Ok(handle) => handle,
+        Err(e) => {
+            eprintln!("Failed to initialize logger: {}", e);
+            std::process::exit(1);
         }
-    })
-    .expect("Error while handling Ctrl-C");
-
-    let request_id_counter = Arc::new(Mutex::new(0));
-    let request_queue = Arc::new(RwLock::new(VecDeque::<Request>::new()));
-    let response_queue = Arc::new(RwLock::new(VecDeque::<Response>::new()));
-    let tcp_client = TcpClient::new(
-        Arc::clone(&request_queue),
-        Arc::clone(&response_queue),
-        Arc::clone(&running),
-    );
-    let shared_state = Arc::new(RwLock::new(SharedState::new()));
-
-    let http_server_task = start_http_server(
-        Arc::clone(&request_queue),
-        Arc::clone(&shared_state),
-        Arc::clone(&request_id_counter),
-        Arc::clone(&config),
+    };
+    log_panics();
+    info!(
+        "Starting hottoh_api {} (stove {}:{}, poll every {} ms, HTTP {}:{}, log level '{}')",
+        env!("CARGO_PKG_VERSION"),
+        config.stove.ip,
+        config.stove.port,
+        config.stove.poll_interval_ms,
+        config.http_api.ip,
+        config.http_api.port,
+        config.log.level
     );
 
-    let comm_handle = tcp_client.start_tcp_thread(Arc::clone(&config));
-    let manage_handle = tcp_client.message_management_thread(shared_state);
-    let periodic_handle = tcp_client.periodic_request_thread(Arc::clone(&request_id_counter));
+    let bridge = Arc::new(Bridge::new());
+    let worker = TcpClient::new(
+        format!("{}:{}", config.stove.ip, config.stove.port),
+        Duration::from_millis(config.stove.poll_interval_ms),
+        Arc::clone(&bridge),
+    )
+    .start();
+    let reporter = spawn_reporter(
+        Arc::clone(&bridge),
+        Duration::from_secs(config.log.stats_interval_s),
+    );
 
-    // Wait for the HTTP server task to complete
-    http_server_task.await?;
+    // Returns on SIGINT or SIGTERM, or if the address cannot be bound
+    let result = start_http_server(&config.http_api, Arc::clone(&bridge)).await;
+    match &result {
+        Ok(()) => info!("HTTP server stopped"),
+        Err(e) => error!("HTTP server failed: {}", e),
+    }
 
-    // Signal other threads to stop
-    running.store(false, Ordering::SeqCst);
-
-    // Wait for other threads to complete
-    comm_handle.join().unwrap();
-    manage_handle.join().unwrap();
-    periodic_handle.join().unwrap();
-
-    Ok(())
+    bridge.stop();
+    for (name, handle) in [("TCP worker", Some(worker)), ("statistics", reporter)] {
+        if let Some(handle) = handle
+            && handle.join().is_err()
+        {
+            error!("{} thread ended with a panic", name);
+        }
+    }
+    info!("hottoh_api stopped");
+    result
 }

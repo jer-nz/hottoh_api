@@ -1,0 +1,7 @@
+# /etc/conf.d/hottoh_api
+
+# Configuration file
+#HOTTOH_CONFIG="/etc/hottoh_api/config.ini"
+
+# Delay before restarting the service after a crash, in seconds
+#respawn_delay=5
