@@ -36,6 +36,9 @@ Protocol handling checked against the HottoH Wi-Fi module firmware 10.5.0.
 
 ### New
 
+- Release files: static Linux binaries (amd64, arm64), Alpine `.apk` (OpenRC) and Debian `.deb`
+  (systemd) packages, archives with service files, Windows and macOS binaries, `SHA256SUMS`.
+
 - `GET /api/request/{id}`: outcome of a write (`pending`, `sent`, `ok`, `error`, `timeout`).
 - `GET /api/status`: connection state, last answer, last error.
 - Writes are sent before the periodic reads and retried up to 3 times.

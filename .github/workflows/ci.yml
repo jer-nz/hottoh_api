@@ -56,3 +56,30 @@ jobs:
         with:
           components: clippy
       - run: cargo clippy --all-targets --all-features --locked -- -D warnings
+
+  package:
+    name: Static build and packages
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Static build (rust Alpine image)
+        run: |
+          docker run --rm -v "$PWD":/src -w /src rust:1-alpine sh -euxc '
+            apk add --no-cache musl-dev curl file
+            cargo build --release --locked
+            file target/release/hottoh_api | grep -q "static"
+          '
+      - name: Install nFPM
+        env:
+          NFPM_VERSION: 2.46.3
+          NFPM_SHA256: 9170d25ea056d7329def38134b2bcad98d02d221f8331610dcd619e84d28c565
+        run: |
+          curl -sSfL -o nfpm.tar.gz \
+            "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
+          echo "${NFPM_SHA256}  nfpm.tar.gz" | sha256sum -c -
+          sudo tar -xzf nfpm.tar.gz -C /usr/local/bin nfpm
+      - name: Build and install packages
+        run: |
+          packaging/package.sh 0.0.0 amd64 target/release/hottoh_api dist
+          packaging/test-install.sh dist/hottoh-api_0.0.0_amd64.apk
+          packaging/test-install.sh dist/hottoh-api_0.0.0_amd64.deb

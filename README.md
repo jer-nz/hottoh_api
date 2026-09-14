@@ -40,6 +40,35 @@ The HottoH mobile app is not affected: it goes through the vendor cloud relay.
 
 ### Installation
 
+Each [release](https://github.com/jer-nz/hottoh_api/releases) provides statically linked Linux
+binaries (amd64 and arm64, no runtime dependency) and packages that install the service:
+
+| File | Content |
+|---|---|
+| `hottoh-api_<version>_<arch>.apk` | Alpine: `/usr/bin/hottoh_api`, OpenRC service, `/etc/hottoh_api/config.ini` |
+| `hottoh-api_<version>_<arch>.deb` | Debian/Ubuntu: same, with a systemd unit |
+| `hottoh_api-<version>-linux-<arch>.tar.gz` | Binary, sample configuration, OpenRC and systemd files |
+| `hottoh_api-windows-amd64.exe`, `hottoh_api-macos-arm64` | Binary only |
+| `SHA256SUMS` | Checksums |
+
+```sh
+# Alpine (the package is not signed)
+apk add --allow-untrusted ./hottoh-api_0.2.0_amd64.apk
+vi /etc/hottoh_api/config.ini   # stove IP address
+rc-update add hottoh_api default && rc-service hottoh_api start
+
+# Debian / Ubuntu
+dpkg -i ./hottoh-api_0.2.0_amd64.deb
+editor /etc/hottoh_api/config.ini
+systemctl enable --now hottoh_api
+```
+
+The packages create a `hottoh` system user, logs go to `/var/log/hottoh_api/`. The service is not
+started at installation; it is restarted on upgrade if it was running, and a modified
+`config.ini` is kept.
+
+From source:
+
 ```sh
 git clone https://github.com/jer-nz/hottoh_api.git
 cd hottoh_api
@@ -154,6 +183,7 @@ failed). The last 100 requests are kept.
 
 ## Project Structure
 
+- `packaging/` - nFPM configuration, OpenRC and systemd services, package scripts
 - `src/main.rs` - Application entry point
 - `src/hottoh/` - Main module directory
   - `config.rs` - Configuration handling
@@ -165,6 +195,15 @@ failed). The last 100 requests are kept.
   - `hottoh_structs.rs` - Data pages and CRC
   - `shared_struct.rs` - State shared between the TCP worker and the HTTP API (`Bridge`)
   - `stats.rs` - Periodic statistics line and process metrics
+
+## Releases
+
+Pushing a `v<version>` tag matching `Cargo.toml` builds the static Linux binaries on native amd64
+and arm64 runners (rust Alpine image), the Windows and macOS binaries, then the packages with
+[nFPM](https://nfpm.goreleaser.com/) (`packaging/package.sh`), tests their installation in clean
+Alpine and Debian containers (`packaging/test-install.sh`) and publishes the release with the
+notes of `CHANGELOG.md`. Running the Release workflow manually builds everything without
+publishing. The CI checks the static build and the packages on every pull request.
 
 ## Contributing
 
