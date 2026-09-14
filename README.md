@@ -17,6 +17,8 @@ against the module firmware 10.5.0 (field order, integer types, write ranges and
 ### Key Features
 
 - Robust TCP link: frame reassembly, CRC and length checks, automatic reconnection
+- Built for long-running use: bounded queues, panics logged and supervised, periodic statistics
+  (counters, latency, memory, threads, file descriptors)
 - RESTful HTTP API with Swagger documentation
 - Asynchronous writes with status tracking (`/api/request/{id}`)
 - Connection monitoring (`/api/status`)
@@ -59,10 +61,17 @@ ip = 0.0.0.0            # listen on all interfaces
 port = 3000             # HTTP API port
 
 [log]
-level = info            # trace, debug, info, warn, error
+level = info            # trace, debug, info, warn, error (per module: "debug, actix_server = info")
 directory = logs        # directory for log files
-max_log_files = 7       # daily log files to keep
+max_log_files = 7       # rotated log files to keep
+compress = false        # optional, gzip rotated files (the previous one stays plain)
+max_file_size_mb = 100  # optional, also rotate when the file grows beyond this size
+stats_interval_s = 3600 # optional, statistics line in the log (0 = disabled)
 ```
+
+At `debug` level every exchange with the stove is logged (sent frame, answer, delay), about
+1 GiB per month before compression: use it to investigate a problem or test stability, with
+`compress = true`.
 
 ### Run
 
@@ -84,7 +93,7 @@ Swagger UI: `http://localhost:3000/swagger-ui/`
 | `/api/dat/0` | Main data: state, on/off, eco, chrono mode, temperatures, power, fan set points |
 | `/api/dat/1` | Chrono programs: mode and temperature of programs 1 to 3 |
 | `/api/dat/2` | Flow switch, pump, actual fan speeds, puffer/boiler/DHW/room 3 temperatures |
-| `/api/status` | Link with the stove: `connected`, `last_response_at`, `last_error`, `pending_writes` |
+| `/api/status` | Link with the stove (`connected`, `last_response_at`, `last_error`), `pending_writes`, `uptime_s`, counters (`stats`) and process resources (`process`) |
 | `/api/request/{id}` | Outcome of a write: `pending`, `sent`, `ok`, `error` (with `error_code`) or `timeout` |
 
 Temperatures are in °C. Every data page has a `last_updated` timestamp; check `/api/status` to
@@ -103,7 +112,9 @@ detect stale data when the stove is unreachable.
 | `/api/dat/set_fan_speed` | `{"fan": 1, "value": 3}` | 0 to `index_fan_N_set_max` |
 
 Ranges come from the values reported by the stove once they have been read, and fall back to the
-firmware limits otherwise. An invalid value is refused with HTTP 400.
+firmware limits otherwise. An invalid value is refused with HTTP 400. When 32 writes are already
+waiting for the stove (stove unreachable), new writes are refused with HTTP 503; a write that
+could not be sent within 60 s ends as `timeout`.
 
 Writes are asynchronous: the answer comes immediately with a `request_id`.
 
@@ -131,6 +142,16 @@ failed). The last 100 requests are kept.
 - In DAT page 0, `index_fan_N` repeats the fan set point; actual fan speeds are in page 2
   (`index_fan_N_speed`).
 
+## Logs and stability
+
+- Stove state changes (state, on/off, modes, set points, Modbus link) are logged at `info`.
+- A `Stats` line every `stats_interval_s`: requests, answers, timeouts, invalid frames, write
+  outcomes and average latency over the period; reconnections and maximum latency since start;
+  RSS, threads and open file descriptors (watch these for leaks).
+- Panics are written to the log with a backtrace. If the TCP worker thread dies, the process exits
+  (code 70) so that the service manager restarts it instead of serving frozen data.
+- The server stops cleanly on SIGINT and SIGTERM.
+
 ## Project Structure
 
 - `src/main.rs` - Application entry point
@@ -142,7 +163,8 @@ failed). The last 100 requests are kept.
   - `tcp_client_structs.rs` - Frame encoding/decoding and reassembly
   - `hottoh_const.rs` - Commands, states and write indexes
   - `hottoh_structs.rs` - Data pages and CRC
-  - `shared_struct.rs` - State shared between the TCP worker and the HTTP API
+  - `shared_struct.rs` - State shared between the TCP worker and the HTTP API (`Bridge`)
+  - `stats.rs` - Periodic statistics line and process metrics
 
 ## Contributing
 

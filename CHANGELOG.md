@@ -19,6 +19,14 @@ Protocol handling checked against the HottoH Wi-Fi module firmware 10.5.0.
 
 ### Fixes
 
+- Ctrl-C panicked in the `ctrlc` handler (`System::current()` called outside the actix system);
+  `ctrlc` is removed, actix-web already stops on SIGINT and SIGTERM.
+- Panics were only printed on stderr and lost under a service manager: they are now logged with a
+  backtrace, and the process exits if the TCP worker thread dies.
+- The write queue was unbounded, and writes queued while the stove was unreachable stayed
+  `pending` until the next connection.
+- Log lines of the last second before a crash could be lost (buffered writer).
+
 - A TCP read ending in the middle of a frame could panic and stop the TCP thread for good, leaving
   the API serving stale data.
 - `set_chrono_mode` sent `true`/`false` instead of a number and did nothing; it now sends `2`/`0`.
@@ -32,6 +40,13 @@ Protocol handling checked against the HottoH Wi-Fi module firmware 10.5.0.
 - `GET /api/status`: connection state, last answer, last error.
 - Writes are sent before the periodic reads and retried up to 3 times.
 - Reconnection after 3 unanswered requests; connect timeout; configurable `poll_interval_ms`.
-- Unit tests (CRC, frames, pages, write answers, reassembly, ranges).
+- `/api/status` also returns `uptime_s`, `version`, counters (`stats`) and process resources.
+- Log: every exchange at `debug` level, stove state changes at `info`, periodic `Stats` line
+  (`stats_interval_s`), size based rotation (`max_file_size_mb`), gzip of rotated files
+  (`compress`); repeated connection failures are summarised.
+- Writes refused with HTTP 503 when 32 are already waiting.
+- Tests: CRC, frames, pages, write answers, reassembly, ranges, random input; TCP worker against
+  a fake Wi-Fi module (split and noisy answers, silent stove, closed connection, unreachable
+  stove, refused writes); HTTP handlers.
 - Dependencies updated; `crc-any` and `strum` removed; `Cargo.lock` versioned; CI moved from the
   unmaintained `actions-rs` actions to `dtolnay/rust-toolchain`.
