@@ -1,38 +1,25 @@
-# Configuration for GitHub Actions Labeler
-# Automatically adds labels to PRs based on modified files
+# Labels added to pull requests according to the modified files (actions/labeler v5 format)
 
-# Label for documentation changes
 documentation:
-  - README.md
-  - LICENSE
-  - '**/*.md'
+  - changed-files:
+      - any-glob-to-any-file: ['README.md', 'LICENSE', '**/*.md']
 
-# Label for CI/CD changes
 ci:
-  - '.github/**/*'
-  - '.rustfmt.toml'
+  - changed-files:
+      - any-glob-to-any-file: ['.github/**/*', '.rustfmt.toml']
 
-# Label for source code changes
+packaging:
+  - changed-files:
+      - any-glob-to-any-file: ['packaging/**/*']
+
 source:
-  - 'src/**/*'
+  - changed-files:
+      - any-glob-to-any-file: ['src/**/*']
 
-# Label for configuration changes
 config:
-  - 'config.ini'
-  - 'Cargo.toml'
+  - changed-files:
+      - any-glob-to-any-file: ['config.ini', 'Cargo.toml']
 
-# Label for dependency updates
 dependencies:
-  - 'Cargo.toml'
-  - 'Cargo.lock'
-
-# Label for Rust-related changes
-rust:
-  - 'src/**/*.rs'
-  - 'Cargo.toml'
-  - 'Cargo.lock'
-  - '.rustfmt.toml'
-
-# Label for GitHub Actions-related changes
-github-actions:
-  - '.github/workflows/**/*'
+  - changed-files:
+      - any-glob-to-any-file: ['Cargo.toml', 'Cargo.lock']

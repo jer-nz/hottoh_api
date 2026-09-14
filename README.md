@@ -197,14 +197,24 @@ failed). The last 100 requests are kept.
   - `shared_struct.rs` - State shared between the TCP worker and the HTTP API (`Bridge`)
   - `stats.rs` - Periodic statistics line and process metrics
 
-## Releases
+## Publishing a release
 
-Pushing a `v<version>` tag matching `Cargo.toml` builds the static Linux binaries on native amd64
-and arm64 runners (rust Alpine image), the Windows and macOS binaries, then the packages with
-[nFPM](https://nfpm.goreleaser.com/) (`packaging/package.sh`), tests their installation in clean
-Alpine and Debian containers (`packaging/test-install.sh`) and publishes the release with the
-notes of `CHANGELOG.md`. Running the Release workflow manually builds everything without
-publishing. The CI checks the static build and the packages on every pull request.
+1. Set the version in `Cargo.toml` and describe it in a `## <version>` section of `CHANGELOG.md`.
+2. Open a pull request to `main`. Besides the tests, the CI builds the static binary and installs
+   the `.apk` and `.deb` packages in clean Alpine and Debian containers. Merge once it is green.
+3. Optionally, run the *Release* workflow by hand (Actions → Release → Run workflow): it builds every
+   file and attaches them to the run, without publishing anything.
+4. Tag `main` with the version and push the tag:
+
+   ```sh
+   git tag v2.0.0
+   git push origin v2.0.0
+   ```
+
+The *Release* workflow then builds the binaries (static Linux amd64 and arm64, Windows, macOS),
+the packages ([nFPM](https://nfpm.goreleaser.com/), `packaging/package.sh`), tests them and
+publishes the GitHub release with the changelog section as notes. It stops if the tag does not
+match the version in `Cargo.toml`.
 
 ## Contributing
 
