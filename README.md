@@ -11,8 +11,9 @@ Hottoh API is a bridge between the local TCP protocol of the HottoH Wi-Fi module
 ("Wifier 2.0", port 5001) and a RESTful HTTP API, usable from Home Assistant or any HTTP client.
 
 This project is based on the work done by benlbrm on the [hottohpy](https://github.com/benlbrm/hottohpy)
-project. Special thanks to him for his work. Since 0.2.0 the protocol handling has been checked
-against the module firmware 10.5.0 (field order, integer types, write ranges and error codes).
+project. Special thanks to him for his work. Since 2.0.0 the protocol handling has been checked
+against the module firmware 10.5.0, the current version (field order, integer types, write ranges
+and error codes).
 
 ### Key Features
 
@@ -53,12 +54,12 @@ binaries (amd64 and arm64, no runtime dependency) and packages that install the 
 
 ```sh
 # Alpine (the package is not signed)
-apk add --allow-untrusted ./hottoh-api_0.2.0_amd64.apk
+apk add --allow-untrusted ./hottoh-api_2.0.0_amd64.apk
 vi /etc/hottoh_api/config.ini   # stove IP address
 rc-update add hottoh_api default && rc-service hottoh_api start
 
 # Debian / Ubuntu
-dpkg -i ./hottoh-api_0.2.0_amd64.deb
+dpkg -i ./hottoh-api_2.0.0_amd64.deb
 editor /etc/hottoh_api/config.ini
 systemctl enable --now hottoh_api
 ```

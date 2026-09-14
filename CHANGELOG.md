@@ -1,8 +1,21 @@
 # Changelog
 
-## 0.2.0
+## 2.0.0
 
-Protocol handling checked against the HottoH Wi-Fi module firmware 10.5.0.
+Follows 1.0.0 (April 2025, published from 0.1.0 sources). The major version reflects the breaking
+API changes below.
+
+### Wi-Fi module firmware 10.5.0
+
+- Supports the current firmware of the HottoH Wi-Fi module ("Wifier 2.0"), **10.5.0**. The whole
+  protocol handling was checked against its code: frame format and CRC, field order and integer
+  types of the INF and DAT pages, write indexes and their ranges, `ERR` codes, one client and one
+  frame at a time.
+- Tested on a real stove with firmware 10.5.0: reading of every page, writes, refused values,
+  reconnection after the module restarts.
+- Updating modules still on firmware 10.1.0 is recommended: that version loses its Wi-Fi link
+  about every five minutes and restarts (its Internet check loads a whole web page in memory).
+  hottoh_api reconnects by itself, but data is unavailable during each restart.
 
 ### Breaking changes
 
