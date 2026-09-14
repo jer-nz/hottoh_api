@@ -27,9 +27,17 @@ and error codes).
 
 ## Important: one client at a time
 
-The Wi-Fi module accepts **a single TCP client**: it closes its listening socket once a client is
-connected. While hottoh_api runs, other local tools (or a second hottoh_api instance) are refused.
-The HottoH mobile app is not affected: it goes through the vendor cloud relay.
+hottoh_api talks to the stove through its HottoH Wi-Fi module (WiFire), and this module accepts
+**a single local TCP connection**: as soon as a client is connected, it stops listening on port
+5001 until that client disconnects. While hottoh_api runs, any other local client is refused: a
+second hottoh_api instance, a test script, or the HottoH
+[AppFire](https://play.google.com/store/apps/details?id=com.hottoh.appfire) mobile app when it
+connects locally.
+
+AppFire can still be used alongside hottoh_api if the **cloud mode** of the Wi-Fi module is
+enabled: the app then goes through the HottoH cloud relay instead of the local connection. With
+cloud mode disabled, AppFire and hottoh_api compete for the same connection and cannot be used at
+the same time.
 
 ## Getting Started
 
