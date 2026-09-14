@@ -10,65 +10,52 @@
 //! INF and DAT pages are polled in between.
 
 use crate::hottoh::hottoh_const::{Command, CommandType, write_error_message};
-use crate::hottoh::hottoh_structs::{CommandData, WriteResult};
-use crate::hottoh::shared_struct::{RequestState, SharedState};
+use crate::hottoh::hottoh_structs::{CommandData, DAT0Data, INFData, WriteResult};
+use crate::hottoh::shared_struct::{Bridge, QueuedWrite, RequestState};
 use crate::hottoh::tcp_client_structs::{FrameBuffer, Request, Response};
 use log::{debug, error, info, warn};
-use std::collections::VecDeque;
 use std::io::{ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::panic::{self, AssertUnwindSafe};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, RwLock, RwLockWriteGuard};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-const READ_POLL: Duration = Duration::from_millis(200);
-const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
-const RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
-/// Minimum delay between two frames, so that the module never reads two at once
-const MIN_FRAME_GAP: Duration = Duration::from_millis(100);
-const RECONNECT_DELAY: Duration = Duration::from_secs(5);
 /// Consecutive unanswered requests before the connection is considered dead
 const MAX_CONSECUTIVE_TIMEOUTS: u32 = 3;
 /// Attempts for a write request (the stove settings are absolute values, resending is safe)
 const MAX_WRITE_ATTEMPTS: u32 = 3;
-/// A write still queued after this delay (stove unreachable) is abandoned
-const WRITE_EXPIRY: Duration = Duration::from_secs(60);
+/// While the stove stays unreachable, one connection failure in this many is logged as a warning
+const FAILURES_PER_WARNING: u32 = 60;
 
-/// Write request waiting to be sent
-#[derive(Debug)]
-pub struct QueuedWrite {
-    request: Request,
-    attempts: u32,
-    queued_at: Instant,
+/// Delays used by the worker
+#[derive(Debug, Clone)]
+pub struct Timings {
+    pub connect: Duration,
+    /// Granularity of the socket reads (shutdown and deadlines are checked in between)
+    pub read_poll: Duration,
+    pub write: Duration,
+    /// Time left to the stove to answer a request
+    pub response: Duration,
+    /// Minimum delay between two frames, so that the module never reads two at once
+    pub min_frame_gap: Duration,
+    pub reconnect: Duration,
+    /// A write still queued after this delay (stove unreachable) is abandoned
+    pub write_expiry: Duration,
 }
 
-impl QueuedWrite {
-    pub fn new(request: Request) -> Self {
+impl Default for Timings {
+    fn default() -> Self {
         Self {
-            request,
-            attempts: 0,
-            queued_at: Instant::now(),
+            connect: Duration::from_secs(5),
+            read_poll: Duration::from_millis(200),
+            write: Duration::from_secs(5),
+            response: Duration::from_secs(5),
+            min_frame_gap: Duration::from_millis(100),
+            reconnect: Duration::from_secs(5),
+            write_expiry: Duration::from_secs(60),
         }
     }
-}
-
-/// Queue of writes shared with the HTTP API
-pub type WriteQueue = Arc<Mutex<VecDeque<QueuedWrite>>>;
-
-/// Locks the shared state, recovering from a poisoned lock instead of panicking
-pub fn state_write(state: &RwLock<SharedState>) -> RwLockWriteGuard<'_, SharedState> {
-    state
-        .write()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-fn lock_queue(queue: &WriteQueue) -> std::sync::MutexGuard<'_, VecDeque<QueuedWrite>> {
-    queue
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Pages polled in turn
@@ -85,85 +72,129 @@ enum Job {
     Poll(Request),
 }
 
+impl Job {
+    fn request(&self) -> &Request {
+        match self {
+            Job::Write(write) => &write.request,
+            Job::Poll(request) => request,
+        }
+    }
+}
+
+/// Exits the process if the worker thread ends while the application still runs (a panic
+/// outside `catch_unwind`): the service supervisor then restarts it, instead of the API
+/// serving frozen data.
+struct ExitOnUnexpectedEnd(Arc<Bridge>);
+
+impl Drop for ExitOnUnexpectedEnd {
+    fn drop(&mut self) {
+        if self.0.is_running() {
+            error!("TCP worker ended unexpectedly: exiting so that the service is restarted");
+            std::process::exit(70);
+        }
+    }
+}
+
 /// TCP client for the stove
 pub struct TcpClient {
     address: String,
     poll_interval: Duration,
-    writes: WriteQueue,
-    state: Arc<RwLock<SharedState>>,
-    request_id: Arc<AtomicU32>,
-    running: Arc<AtomicBool>,
+    timings: Timings,
+    bridge: Arc<Bridge>,
 }
 
 impl TcpClient {
-    pub fn new(
-        address: String,
-        poll_interval: Duration,
-        writes: WriteQueue,
-        state: Arc<RwLock<SharedState>>,
-        request_id: Arc<AtomicU32>,
-        running: Arc<AtomicBool>,
-    ) -> Self {
+    pub fn new(address: String, poll_interval: Duration, bridge: Arc<Bridge>) -> Self {
         Self {
             address,
             poll_interval,
-            writes,
-            state,
-            request_id,
-            running,
+            timings: Timings::default(),
+            bridge,
         }
+    }
+
+    #[cfg(test)]
+    pub fn with_timings(mut self, timings: Timings) -> Self {
+        self.timings = timings;
+        self
     }
 
     /// Starts the worker thread
     pub fn start(self) -> thread::JoinHandle<()> {
-        state_write(&self.state).set_stove_address(&self.address);
-        thread::spawn(move || {
-            while self.is_running() {
-                match panic::catch_unwind(AssertUnwindSafe(|| self.run_connection())) {
-                    Ok(Ok(())) => {}
-                    Ok(Err(e)) => {
-                        warn!("Stove connection: {}", e);
-                        state_write(&self.state).set_last_error(e);
-                    }
-                    Err(panic) => {
-                        error!("TCP worker panicked: {:?}", panic);
-                        state_write(&self.state).set_last_error("internal error (panic)");
-                    }
-                }
-                {
-                    let mut state = state_write(&self.state);
-                    state.set_connected(false);
-                }
-                if self.is_running() {
-                    info!(
-                        "Reconnecting to stove in {} s...",
-                        RECONNECT_DELAY.as_secs()
-                    );
-                    self.sleep(RECONNECT_DELAY);
-                }
-            }
-            info!("TCP worker stopped.");
-        })
+        self.bridge.state_mut().set_stove_address(&self.address);
+        thread::Builder::new()
+            .name("tcp-worker".into())
+            .spawn(move || {
+                let _guard = ExitOnUnexpectedEnd(Arc::clone(&self.bridge));
+                self.run();
+                info!("TCP worker stopped.");
+            })
+            .expect("cannot start the TCP worker thread")
     }
 
-    fn is_running(&self) -> bool {
-        self.running.load(Ordering::SeqCst)
-    }
+    /// Connects, serves the connection, and reconnects until the application stops
+    fn run(&self) {
+        let mut failures: u32 = 0;
+        let mut down_since: Option<Instant> = None;
 
-    /// Sleeps in small steps so that shutdown is not delayed
-    fn sleep(&self, duration: Duration) {
-        let end = Instant::now() + duration;
-        while self.is_running() {
-            let now = Instant::now();
-            if now >= end {
-                break;
+        while self.bridge.is_running() {
+            let error = match self.connect() {
+                Ok((stream, addr)) => {
+                    match down_since.take() {
+                        Some(since) => info!(
+                            "Connected to stove at {} after {} failed attempts ({} s without link)",
+                            addr,
+                            failures,
+                            since.elapsed().as_secs()
+                        ),
+                        None => info!("Connected to stove at {}", addr),
+                    }
+                    failures = 0;
+                    self.bridge.state_mut().set_connected(true);
+                    let outcome = panic::catch_unwind(AssertUnwindSafe(|| self.serve(stream)));
+                    let error = match outcome {
+                        Ok(Ok(())) => None,
+                        Ok(Err(e)) => Some(e),
+                        // Details were logged by the panic hook
+                        Err(_) => Some("internal error (panic)".to_string()),
+                    };
+                    {
+                        let mut state = self.bridge.state_mut();
+                        state.set_connected(false);
+                        if error.is_some() {
+                            state.stats_mut().disconnections += 1;
+                        }
+                    }
+                    if let Some(e) = &error {
+                        warn!("Stove connection lost: {}", e);
+                        down_since = Some(Instant::now());
+                    }
+                    error
+                }
+                Err(e) => {
+                    failures += 1;
+                    down_since.get_or_insert_with(Instant::now);
+                    self.bridge.state_mut().stats_mut().connect_failures += 1;
+                    if failures == 1 || failures.is_multiple_of(FAILURES_PER_WARNING) {
+                        warn!("Stove unreachable ({} attempts): {}", failures, e);
+                    } else {
+                        debug!("Stove unreachable ({} attempts): {}", failures, e);
+                    }
+                    Some(e)
+                }
+            };
+            if let Some(e) = error {
+                self.bridge.state_mut().set_last_error(e);
             }
-            thread::sleep((end - now).min(Duration::from_millis(100)));
+            self.drop_expired_writes();
+            if self.bridge.is_running() {
+                debug!(
+                    "Reconnecting to stove in {} ms",
+                    self.timings.reconnect.as_millis()
+                );
+                self.bridge.sleep(self.timings.reconnect);
+            }
         }
-    }
-
-    fn next_request_id(&self) -> u32 {
-        self.request_id.fetch_add(1, Ordering::SeqCst) % 100_000
     }
 
     fn resolve(&self) -> Result<SocketAddr, String> {
@@ -174,26 +205,27 @@ impl TcpClient {
             .ok_or_else(|| format!("cannot resolve {}", self.address))
     }
 
-    /// Runs one connection until it fails or the application stops
-    fn run_connection(&self) -> Result<(), String> {
+    fn connect(&self) -> Result<(TcpStream, SocketAddr), String> {
         let addr = self.resolve()?;
-        let mut stream = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT)
+        let stream = TcpStream::connect_timeout(&addr, self.timings.connect)
             .map_err(|e| format!("cannot connect to {}: {}", addr, e))?;
         stream
-            .set_read_timeout(Some(READ_POLL))
-            .and_then(|_| stream.set_write_timeout(Some(WRITE_TIMEOUT)))
+            .set_read_timeout(Some(self.timings.read_poll))
+            .and_then(|_| stream.set_write_timeout(Some(self.timings.write)))
             .and_then(|_| stream.set_nodelay(true))
             .map_err(|e| format!("socket setup failed: {}", e))?;
-        info!("Connected to stove at {}", addr);
-        state_write(&self.state).set_connected(true);
+        Ok((stream, addr))
+    }
 
+    /// Runs one connection until it fails or the application stops
+    fn serve(&self, mut stream: TcpStream) -> Result<(), String> {
         let mut buffer = FrameBuffer::new();
         let mut consecutive_timeouts = 0;
         let mut poll_index = 0;
         let mut next_poll = Instant::now();
-        let mut last_frame = Instant::now() - MIN_FRAME_GAP;
+        let mut last_frame: Option<Instant> = None;
 
-        while self.is_running() {
+        while self.bridge.is_running() {
             let job = match self.next_write() {
                 Some(write) => Job::Write(write),
                 None if Instant::now() >= next_poll => {
@@ -204,29 +236,27 @@ impl TcpClient {
                     }
                     let params = page.map(|p| vec![p.to_string()]).unwrap_or_default();
                     Job::Poll(Request::new(
-                        self.next_request_id(),
+                        self.bridge.next_request_id(),
                         command,
                         CommandType::Read,
                         params,
                     ))
                 }
                 None => {
-                    self.sleep(Duration::from_millis(50));
+                    self.bridge.sleep(Duration::from_millis(50));
                     continue;
                 }
             };
 
-            let gap = last_frame.elapsed();
-            if gap < MIN_FRAME_GAP {
-                thread::sleep(MIN_FRAME_GAP - gap);
+            if let Some(gap) = last_frame.map(|t| t.elapsed())
+                && gap < self.timings.min_frame_gap
+            {
+                thread::sleep(self.timings.min_frame_gap - gap);
             }
 
-            let request = match &job {
-                Job::Write(write) => write.request.clone(),
-                Job::Poll(request) => request.clone(),
-            };
+            let request = job.request().clone();
             if let Job::Write(_) = job {
-                state_write(&self.state).update_request(
+                self.bridge.state_mut().update_request(
                     request.get_req_id(),
                     RequestState::Sent,
                     None,
@@ -235,22 +265,26 @@ impl TcpClient {
             }
 
             let outcome = self.exchange(&mut stream, &mut buffer, &request);
-            last_frame = Instant::now();
+            last_frame = Some(Instant::now());
+            if !self.bridge.is_running() {
+                break;
+            }
 
             match outcome {
                 Ok(Some(response)) => {
                     consecutive_timeouts = 0;
-                    state_write(&self.state).mark_response_received();
                     self.handle_response(&request, &response);
                 }
                 Ok(None) => {
                     consecutive_timeouts += 1;
+                    self.bridge.state_mut().stats_mut().timeouts += 1;
                     warn!(
-                        "No answer to request {} ({} {} {:?})",
+                        "No answer to request {} ({} {} {:?}) within {} ms",
                         request.get_req_id(),
                         request.get_command().as_str(),
                         request.get_command_type().as_str(),
-                        request.get_params()
+                        request.get_params(),
+                        self.timings.response.as_millis()
                     );
                     if let Job::Write(write) = job {
                         self.retry_or_fail(write, "no answer from stove");
@@ -273,30 +307,37 @@ impl TcpClient {
         Ok(())
     }
 
-    /// Takes the next write from the queue, dropping the expired ones
+    /// Takes the next write from the queue
     fn next_write(&self) -> Option<QueuedWrite> {
-        let mut queue = lock_queue(&self.writes);
-        let mut result = None;
-        while let Some(write) = queue.pop_front() {
-            if write.queued_at.elapsed() > WRITE_EXPIRY {
-                warn!(
-                    "Dropping write request {}: stove unreachable for {} s",
-                    write.request.get_req_id(),
-                    WRITE_EXPIRY.as_secs()
-                );
-                state_write(&self.state).update_request(
-                    write.request.get_req_id(),
-                    RequestState::Timeout,
-                    None,
-                    Some("stove unreachable".into()),
-                );
-                continue;
+        self.drop_expired_writes();
+        self.bridge.writes().pop_front()
+    }
+
+    /// Abandons the writes queued for too long (stove unreachable)
+    fn drop_expired_writes(&self) {
+        let mut expired = Vec::new();
+        self.bridge.writes().retain(|write| {
+            let alive = write.queued_at.elapsed() <= self.timings.write_expiry;
+            if !alive {
+                expired.push(write.request.get_req_id());
             }
-            result = Some(write);
-            break;
+            alive
+        });
+        for id in expired {
+            warn!(
+                "Dropping write request {}: not sent within {} s",
+                id,
+                self.timings.write_expiry.as_secs()
+            );
+            let mut state = self.bridge.state_mut();
+            state.stats_mut().writes_failed += 1;
+            state.update_request(
+                id,
+                RequestState::Timeout,
+                None,
+                Some("stove unreachable".into()),
+            );
         }
-        state_write(&self.state).set_pending_writes(queue.len());
-        result
     }
 
     /// Puts a failed write back at the head of the queue, or marks it as timed out
@@ -304,17 +345,25 @@ impl TcpClient {
         write.attempts += 1;
         let id = write.request.get_req_id();
         if write.attempts < MAX_WRITE_ATTEMPTS {
-            debug!("Retrying write request {} ({})", id, reason);
-            state_write(&self.state).update_request(id, RequestState::Pending, None, None);
-            lock_queue(&self.writes).push_front(write);
-        } else {
-            warn!("Write request {} failed: {}", id, reason);
-            state_write(&self.state).update_request(
-                id,
-                RequestState::Timeout,
-                None,
-                Some(reason.to_string()),
+            info!(
+                "Retrying write request {} (attempt {} failed: {})",
+                id, write.attempts, reason
             );
+            self.bridge
+                .state_mut()
+                .update_request(id, RequestState::Pending, None, None);
+            self.bridge.writes().push_front(write);
+        } else {
+            warn!(
+                "Write request {} {:?} failed after {} attempts: {}",
+                id,
+                write.request.get_params(),
+                write.attempts,
+                reason
+            );
+            let mut state = self.bridge.state_mut();
+            state.stats_mut().writes_failed += 1;
+            state.update_request(id, RequestState::Timeout, None, Some(reason.to_string()));
         }
     }
 
@@ -326,17 +375,16 @@ impl TcpClient {
         buffer: &mut FrameBuffer,
         request: &Request,
     ) -> Result<Option<Response>, String> {
-        debug!(
-            "Sending {}",
-            String::from_utf8_lossy(&request.build_message()).trim_end()
-        );
+        let message = request.build_message();
+        let sent = Instant::now();
+        self.bridge.state_mut().stats_mut().requests += 1;
         stream
-            .write_all(&request.build_message())
+            .write_all(&message)
             .map_err(|e| format!("send failed: {}", e))?;
 
-        let deadline = Instant::now() + RESPONSE_TIMEOUT;
+        let deadline = sent + self.timings.response;
         let mut chunk = [0u8; 1024];
-        while Instant::now() < deadline && self.is_running() {
+        while Instant::now() < deadline && self.bridge.is_running() {
             match stream.read(&mut chunk) {
                 Ok(0) => return Err("connection closed by the stove".into()),
                 Ok(n) => {
@@ -344,17 +392,35 @@ impl TcpClient {
                     while let Some(frame) = buffer.next_frame() {
                         match Response::from_message(&frame) {
                             Ok(response) if response.get_req_id() == request.get_req_id() => {
+                                let latency = sent.elapsed();
+                                debug!(
+                                    "{} -> {} ({} ms)",
+                                    String::from_utf8_lossy(&message).trim_end(),
+                                    String::from_utf8_lossy(&frame).trim_end(),
+                                    latency.as_millis()
+                                );
+                                let mut state = self.bridge.state_mut();
+                                state.stats_mut().record_answer(latency);
+                                state.mark_response_received();
                                 return Ok(Some(response));
                             }
-                            Ok(response) => debug!(
-                                "Ignoring answer to request {} (late or unexpected)",
-                                response.get_req_id()
-                            ),
-                            Err(e) => warn!(
-                                "Invalid frame from stove: {} ({:?})",
-                                e,
-                                String::from_utf8_lossy(&frame).trim_end()
-                            ),
+                            Ok(response) => {
+                                self.bridge.state_mut().stats_mut().late_answers += 1;
+                                debug!(
+                                    "Ignoring answer to request {} while waiting for {}: {}",
+                                    response.get_req_id(),
+                                    request.get_req_id(),
+                                    String::from_utf8_lossy(&frame).trim_end()
+                                );
+                            }
+                            Err(e) => {
+                                self.bridge.state_mut().stats_mut().invalid_frames += 1;
+                                warn!(
+                                    "Invalid frame from stove: {} ({:?})",
+                                    e,
+                                    String::from_utf8_lossy(&frame).trim_end()
+                                );
+                            }
                         }
                     }
                 }
@@ -363,23 +429,52 @@ impl TcpClient {
                 Err(e) => return Err(format!("receive failed: {}", e)),
             }
         }
+        debug!(
+            "{} -> no answer",
+            String::from_utf8_lossy(&message).trim_end()
+        );
         Ok(None)
     }
 
     /// Stores decoded data or the outcome of a write
     fn handle_response(&self, request: &Request, response: &Response) {
         let id = request.get_req_id();
-        let is_write = request.get_command_type() == CommandType::Write;
-        match response.command_data() {
-            Ok(CommandData::Inf(data)) => state_write(&self.state).set_inf(data),
-            Ok(CommandData::Dat0(data)) => state_write(&self.state).set_dat0(data),
-            Ok(CommandData::Dat1(data)) => state_write(&self.state).set_dat1(data),
-            Ok(CommandData::Dat2(data)) => state_write(&self.state).set_dat2(data),
-            Ok(CommandData::Write(WriteResult::Ok)) => {
-                info!("Write request {} {:?}: OK", id, request.get_params());
-                state_write(&self.state).update_request(id, RequestState::Ok, None, None);
+        let data = match response.command_data() {
+            Ok(data) => data,
+            Err(e) => {
+                warn!("Cannot decode answer to request {}: {}", id, e);
+                let mut state = self.bridge.state_mut();
+                state.stats_mut().decode_errors += 1;
+                if request.get_command_type() == CommandType::Write {
+                    state.update_request(
+                        id,
+                        RequestState::Error,
+                        None,
+                        Some(format!("invalid answer: {}", e)),
+                    );
+                }
+                return;
             }
-            Ok(CommandData::Write(WriteResult::Error(code))) => {
+        };
+
+        let mut state = self.bridge.state_mut();
+        match data {
+            CommandData::Inf(data) => {
+                log_inf_changes(state.inf_if_received(), &data);
+                state.set_inf(data);
+            }
+            CommandData::Dat0(data) => {
+                log_dat0_changes(state.dat0_if_received(), &data);
+                state.set_dat0(data);
+            }
+            CommandData::Dat1(data) => state.set_dat1(data),
+            CommandData::Dat2(data) => state.set_dat2(data),
+            CommandData::Write(WriteResult::Ok) => {
+                info!("Write request {} {:?}: OK", id, request.get_params());
+                state.stats_mut().writes_ok += 1;
+                state.update_request(id, RequestState::Ok, None, None);
+            }
+            CommandData::Write(WriteResult::Error(code)) => {
                 warn!(
                     "Write request {} {:?} refused by stove: ERR {} ({})",
                     id,
@@ -387,24 +482,379 @@ impl TcpClient {
                     code,
                     write_error_message(code)
                 );
-                state_write(&self.state).update_request(
+                state.stats_mut().writes_refused += 1;
+                state.update_request(
                     id,
                     RequestState::Error,
                     Some(code),
                     Some(write_error_message(code).to_string()),
                 );
             }
-            Err(e) => {
-                warn!("Cannot decode answer to request {}: {}", id, e);
-                if is_write {
-                    state_write(&self.state).update_request(
-                        id,
-                        RequestState::Error,
-                        None,
-                        Some(format!("invalid answer: {}", e)),
-                    );
-                }
+        }
+    }
+}
+
+/// Logs the module identity when first received, and its changes
+fn log_inf_changes(old: Option<&INFData>, new: &INFData) {
+    match old {
+        None => info!(
+            "Module {} firmware {}, Wi-Fi signal {}",
+            new.hostname, new.version, new.signal
+        ),
+        Some(old) if old.hostname != new.hostname || old.version != new.version => info!(
+            "Module changed: {} {} -> {} {}",
+            old.hostname, old.version, new.hostname, new.version
+        ),
+        Some(_) => {}
+    }
+}
+
+/// Logs the stove state when first received, then every change of its discrete fields
+/// (state, modes, set points). Measures are only in the debug frame dumps.
+fn log_dat0_changes(old: Option<&DAT0Data>, new: &DAT0Data) {
+    let Some(old) = old else {
+        info!(
+            "Stove: state {:?}, on {}, eco {}, chrono mode {}, set point {} °C, power {} ({}..={}), \
+             room {} °C, smoke {} °C, Modbus link {}",
+            new.index_stove_state,
+            new.index_stove_on,
+            new.index_eco_mode,
+            new.index_chrono_mode,
+            new.index_ambient_t1_set,
+            new.index_power_set,
+            new.index_power_min,
+            new.index_power_max,
+            new.index_ambient_t1,
+            new.index_smoke_t,
+            new.index_valid
+        );
+        return;
+    };
+    macro_rules! log_changed {
+        ($($field:ident),+ $(,)?) => {$(
+            if old.$field != new.$field {
+                info!("Stove {}: {:?} -> {:?}", stringify!($field), old.$field, new.$field);
+            }
+        )+};
+    }
+    log_changed!(
+        index_valid,
+        index_stove_state,
+        index_stove_on,
+        index_eco_mode,
+        index_chrono_mode,
+        index_ambient_t1_set,
+        index_ambient_t2_set,
+        index_water_set,
+        index_power_set,
+        index_fan_1_set,
+        index_fan_2_set,
+        index_fan_3_set,
+        index_manufacturer,
+        index_stove_type,
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hottoh::hottoh_const::StoveCommands;
+    use crate::hottoh::hottoh_structs::calculate_checksum;
+    use crate::hottoh::shared_struct::RequestStatus;
+    use std::net::TcpListener;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const DAT0: &str = "0;9;0;1;33;8;1;0;2;215;220;50;300;-15;0;0;0;0;0;0;0;1450;\
+                        3;3;1;5;1200;3;3;5;0;0;0;0;0;0;";
+    const DAT1: &str = "1;2;200;70;300;180;70;300;200;70;300;";
+    const DAT2: &str = "2;0;1;3;0;0;450;600;300;800;-10;0;0;0;0;0;0;0;195;200;70;300;";
+
+    fn frame(id: u32, command: &str, kind: &str, params: &str) -> Vec<u8> {
+        let body = format!(
+            "{:05}C---{:04X}{}{}{}",
+            id,
+            params.len(),
+            command,
+            kind,
+            params
+        );
+        format!("#{}{}\n", body, calculate_checksum(&body)).into_bytes()
+    }
+
+    /// What the fake module does with a request
+    enum Reply {
+        /// Sends these bytes at once
+        Send(Vec<u8>),
+        /// Sends these bytes in two TCP writes, 20 ms apart
+        Split(Vec<u8>),
+        Silent,
+        Close,
+    }
+
+    /// Answer of a healthy stove
+    fn answer(request: &Response) -> Vec<u8> {
+        let id = request.get_req_id();
+        match (request.get_command(), request.get_command_type()) {
+            (Command::Inf, _) => frame(id, "INF", "R", "HOTTOH32;10.5.0;196;"),
+            (Command::Dat, CommandType::Write) => frame(id, "DAT", "W", "OK;"),
+            (Command::Dat, _) => {
+                let page = match request.get_params() {
+                    [p] if p == "0" => DAT0,
+                    [p] if p == "1" => DAT1,
+                    _ => DAT2,
+                };
+                frame(id, "DAT", "R", page)
             }
         }
+    }
+
+    /// Fake Wi-Fi module on a local port: one client at a time, `reply` gets the connection
+    /// number (from 0) and the request. Returns the address and the connection counter.
+    fn fake_stove<F>(reply: F) -> (String, Arc<AtomicUsize>)
+    where
+        F: Fn(usize, &Response) -> Reply + Send + 'static,
+    {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap().to_string();
+        let connections = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&connections);
+        thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let connection = counter.fetch_add(1, Ordering::SeqCst);
+                let mut buffer = FrameBuffer::new();
+                let mut chunk = [0u8; 256];
+                'connection: loop {
+                    let n = match stream.read(&mut chunk) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => n,
+                    };
+                    buffer.extend(&chunk[..n]);
+                    while let Some(frame) = buffer.next_frame() {
+                        let request = Response::from_message(&frame).expect("invalid request");
+                        let sent = match reply(connection, &request) {
+                            Reply::Send(bytes) => stream.write_all(&bytes),
+                            Reply::Split(bytes) => {
+                                let (head, tail) = bytes.split_at(bytes.len() / 2);
+                                stream.write_all(head).and_then(|_| {
+                                    thread::sleep(Duration::from_millis(20));
+                                    stream.write_all(tail)
+                                })
+                            }
+                            Reply::Silent => Ok(()),
+                            Reply::Close => break 'connection,
+                        };
+                        if sent.is_err() {
+                            break 'connection;
+                        }
+                    }
+                }
+            }
+        });
+        (address, connections)
+    }
+
+    fn fast_timings() -> Timings {
+        Timings {
+            connect: Duration::from_secs(1),
+            read_poll: Duration::from_millis(10),
+            write: Duration::from_secs(1),
+            response: Duration::from_millis(150),
+            min_frame_gap: Duration::from_millis(1),
+            reconnect: Duration::from_millis(50),
+            write_expiry: Duration::from_secs(60),
+        }
+    }
+
+    struct Worker {
+        bridge: Arc<Bridge>,
+        handle: Option<thread::JoinHandle<()>>,
+    }
+
+    impl Worker {
+        fn start(address: String, timings: Timings, setup: impl FnOnce(&Bridge)) -> Self {
+            let bridge = Arc::new(Bridge::new());
+            setup(&bridge);
+            let handle = TcpClient::new(address, Duration::from_millis(10), Arc::clone(&bridge))
+                .with_timings(timings)
+                .start();
+            Self {
+                bridge,
+                handle: Some(handle),
+            }
+        }
+
+        fn wait_for(&self, what: &str, condition: impl Fn(&Bridge) -> bool) {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !condition(&self.bridge) {
+                assert!(Instant::now() < deadline, "timeout waiting for {}", what);
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+
+        fn request(&self, id: u32) -> RequestStatus {
+            self.bridge.state().get_request(id).unwrap().clone()
+        }
+    }
+
+    impl Drop for Worker {
+        fn drop(&mut self) {
+            self.bridge.stop();
+            if let Some(handle) = self.handle.take() {
+                let _ = handle.join();
+            }
+        }
+    }
+
+    fn request_done(id: u32) -> impl Fn(&Bridge) -> bool {
+        move |b| {
+            !matches!(
+                b.state().get_request(id).map(|r| r.status.clone()),
+                Some(RequestState::Pending | RequestState::Sent)
+            )
+        }
+    }
+
+    #[test]
+    fn polls_every_page() {
+        let (address, connections) = fake_stove(|_, r| Reply::Send(answer(r)));
+        let worker = Worker::start(address, fast_timings(), |_| {});
+        worker.wait_for("all pages", |b| {
+            let s = b.state();
+            s.inf_if_received().is_some()
+                && s.dat0_if_received().is_some()
+                && s.dat1_if_received().is_some()
+                && s.get_dat2().index_fan_1_speed == 3
+        });
+        let state = worker.bridge.state();
+        assert_eq!(state.get_inf().version, "10.5.0");
+        assert_eq!(state.get_dat0().index_ambient_t1, 21.5);
+        assert!(state.connection().connected);
+        assert_eq!(state.connection().stats.timeouts, 0);
+        assert_eq!(connections.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn write_is_sent_first_and_acknowledged() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let log = Arc::clone(&seen);
+        let (address, _) = fake_stove(move |_, r| {
+            log.lock()
+                .unwrap()
+                .push((r.get_command_type(), r.get_params().to_vec()));
+            Reply::Send(answer(r))
+        });
+        let mut id = 0;
+        let worker = Worker::start(address, fast_timings(), |b| {
+            id = b.queue_write(StoveCommands::PowerLevel, 3).unwrap();
+        });
+        worker.wait_for("write outcome", request_done(id));
+        let status = worker.request(id);
+        assert_eq!(status.status, RequestState::Ok);
+        assert_eq!(status.attempts, 1);
+        assert_eq!(
+            seen.lock().unwrap()[0],
+            (CommandType::Write, vec!["2".to_string(), "3".to_string()])
+        );
+        assert_eq!(worker.bridge.state().connection().stats.writes_ok, 1);
+    }
+
+    #[test]
+    fn refused_write_reports_the_stove_error() {
+        let (address, _) = fake_stove(|_, r| match r.get_command_type() {
+            CommandType::Write => Reply::Send(frame(r.get_req_id(), "DAT", "W", "ERR;17;")),
+            _ => Reply::Send(answer(r)),
+        });
+        let mut id = 0;
+        let worker = Worker::start(address, fast_timings(), |b| {
+            id = b.queue_write(StoveCommands::ChronoOnOff, 1).unwrap();
+        });
+        worker.wait_for("write outcome", request_done(id));
+        let status = worker.request(id);
+        assert_eq!(status.status, RequestState::Error);
+        assert_eq!(status.error_code, Some(17));
+        assert_eq!(worker.bridge.state().connection().stats.writes_refused, 1);
+    }
+
+    #[test]
+    fn split_noisy_and_late_answers_are_handled() {
+        let (address, _) = fake_stove(|_, r| {
+            let mut bytes = b"noise\n#garbage\n".to_vec();
+            // An answer to an old request comes first
+            bytes.extend(frame(r.get_req_id().wrapping_sub(1), "INF", "R", "X;1;2;"));
+            bytes.extend(answer(r));
+            Reply::Split(bytes)
+        });
+        let worker = Worker::start(address, fast_timings(), |_| {});
+        worker.wait_for("DAT pages", |b| b.state().dat1_if_received().is_some());
+        let stats = worker.bridge.state().connection().stats.clone();
+        assert_eq!(stats.timeouts, 0);
+        assert!(stats.invalid_frames > 0);
+        assert!(stats.late_answers > 0);
+        assert_eq!(stats.decode_errors, 0);
+    }
+
+    #[test]
+    fn silent_stove_causes_retries_then_reconnection() {
+        let (address, connections) = fake_stove(|connection, r| match connection {
+            0 => Reply::Silent,
+            _ => Reply::Send(answer(r)),
+        });
+        let mut id = 0;
+        let worker = Worker::start(address, fast_timings(), |b| {
+            id = b.queue_write(StoveCommands::EcoMode, 1).unwrap();
+        });
+        worker.wait_for("write outcome", request_done(id));
+        worker.wait_for("data after reconnection", |b| {
+            b.state().dat0_if_received().is_some()
+        });
+        let status = worker.request(id);
+        assert_eq!(status.status, RequestState::Timeout);
+        assert_eq!(status.attempts, MAX_WRITE_ATTEMPTS);
+        let state = worker.bridge.state();
+        assert_eq!(state.connection().stats.writes_failed, 1);
+        assert_eq!(state.connection().stats.disconnections, 1);
+        assert!(state.connection().connected);
+        assert_eq!(connections.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn closed_connection_is_reopened() {
+        let (address, connections) = fake_stove(|connection, r| match connection {
+            0 | 1 => Reply::Close,
+            _ => Reply::Send(answer(r)),
+        });
+        let worker = Worker::start(address, fast_timings(), |_| {});
+        worker.wait_for("data", |b| b.state().dat0_if_received().is_some());
+        let state = worker.bridge.state();
+        assert_eq!(state.connection().stats.disconnections, 2);
+        assert_eq!(state.connection().connections, 3);
+        assert!(state.connection().last_error.is_some());
+        assert_eq!(connections.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn unreachable_stove_expires_queued_writes() {
+        // A port that was just released: connections are refused
+        let address = {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.local_addr().unwrap().to_string()
+        };
+        let timings = Timings {
+            write_expiry: Duration::from_millis(100),
+            ..fast_timings()
+        };
+        let mut id = 0;
+        let worker = Worker::start(address, timings, |b| {
+            id = b.queue_write(StoveCommands::OnOff, 0).unwrap();
+        });
+        worker.wait_for("write expiry", request_done(id));
+        assert_eq!(worker.request(id).status, RequestState::Timeout);
+        let state = worker.bridge.state();
+        assert!(!state.connection().connected);
+        assert!(state.connection().stats.connect_failures > 0);
+        assert_eq!(state.connection().stats.writes_failed, 1);
+        assert!(worker.bridge.writes().is_empty());
     }
 }

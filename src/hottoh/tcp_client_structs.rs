@@ -187,6 +187,11 @@ impl Response {
     }
 
     #[cfg(test)]
+    pub fn get_command_type(&self) -> CommandType {
+        self.command_type
+    }
+
+    #[cfg(test)]
     pub fn get_params(&self) -> &[String] {
         &self.params
     }
@@ -370,5 +375,51 @@ mod tests {
         buf.extend(b"\r\nnoise\n");
         buf.extend(INF_FRAME);
         assert_eq!(buf.next_frame().unwrap(), INF_FRAME);
+    }
+
+    /// Deterministic xorshift generator, so that failures can be reproduced
+    fn xorshift(seed: &mut u64) -> u64 {
+        *seed ^= *seed << 13;
+        *seed ^= *seed >> 7;
+        *seed ^= *seed << 17;
+        *seed
+    }
+
+    #[test]
+    fn random_input_never_panics() {
+        let mut seed = 0x9E37_79B9_7F4A_7C15;
+        let mut buf = FrameBuffer::new();
+        let alphabet = b"#\n;-0123456789ABCDEFINFDATRWOKER\xff ";
+        for _ in 0..20_000 {
+            let len = (xorshift(&mut seed) % 80) as usize;
+            let data: Vec<u8> = (0..len)
+                .map(|_| alphabet[(xorshift(&mut seed) % alphabet.len() as u64) as usize])
+                .collect();
+            let _ = Response::from_message(&data);
+            buf.extend(&data);
+            while let Some(frame) = buf.next_frame() {
+                if let Ok(response) = Response::from_message(&frame) {
+                    let _ = response.command_data();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn random_parameters_with_valid_crc_never_panic() {
+        let mut seed = 42;
+        let alphabet = b";-0123456789OKER";
+        for i in 0..20_000 {
+            // The firmware always ends the parameters with ';', so they are never empty
+            let len = 1 + (xorshift(&mut seed) % 120) as usize;
+            let params: String = (0..len)
+                .map(|_| alphabet[(xorshift(&mut seed) % alphabet.len() as u64) as usize] as char)
+                .collect();
+            let (command, kind) = [("DAT", "R"), ("DAT", "W"), ("INF", "R"), ("DAT", "E")][i % 4];
+            let body = format!("00001C---{:04X}{}{}{}", params.len(), command, kind, params);
+            let frame = format!("#{}{}\n", body, calculate_checksum(&body));
+            let response = Response::from_message(frame.as_bytes()).unwrap();
+            let _ = response.command_data();
+        }
     }
 }

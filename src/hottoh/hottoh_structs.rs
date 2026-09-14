@@ -100,18 +100,19 @@ impl<'a> Fields<'a> {
     }
 }
 
-fn now() -> String {
+/// Current local time, RFC 3339
+pub(crate) fn now() -> String {
     Local::now().to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
 /// `INF` answer: `HOTTOH32;<major>.<minor>.<patch>;<signal|nosig>;`
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct INFData {
-    hostname: String,
-    version: String,
+    pub hostname: String,
+    pub version: String,
     /// Wi-Fi signal as reported by the module, or "nosig"
-    signal: String,
-    last_updated: String,
+    pub signal: String,
+    pub last_updated: String,
 }
 
 impl INFData {
