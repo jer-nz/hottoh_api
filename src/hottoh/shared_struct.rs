@@ -89,6 +89,8 @@ pub struct Stats {
     /// Sum of the answer delays, for averages
     pub latency_total_ms: u64,
     pub latency_max_ms: u64,
+    /// Delay of the last answer
+    pub latency_last_ms: u64,
 }
 
 impl Stats {
@@ -97,6 +99,7 @@ impl Stats {
         self.answers += 1;
         self.latency_total_ms = self.latency_total_ms.saturating_add(ms);
         self.latency_max_ms = self.latency_max_ms.max(ms);
+        self.latency_last_ms = ms;
     }
 }
 
@@ -549,5 +552,7 @@ mod tests {
         assert_eq!(stats.answers, 2);
         assert_eq!(stats.latency_total_ms, 140);
         assert_eq!(stats.latency_max_ms, 100);
+        stats.record_answer(Duration::from_millis(60));
+        assert_eq!((stats.latency_max_ms, stats.latency_last_ms), (100, 60));
     }
 }

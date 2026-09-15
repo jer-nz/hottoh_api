@@ -26,6 +26,7 @@ poll_interval_ms = 1000 # pause between two polling cycles (INF + DAT 0/1/2)
 [http_api]
 ip = 127.0.0.1          # 0.0.0.0 to listen on every interface
 port = 3000
+# edit_features = true  # features can be changed from the interface and saved here (default: only without config.ini)
 
 [web_ui]
 enabled = true          # web interface at /
@@ -88,6 +89,13 @@ change the setup of the module (clock, time zone, PIN), delete data or restart t
 disabled and must be enabled explicitly. A disabled feature answers HTTP 403, and the interface
 shows why instead of the control. `GET /api/features` lists the current settings, and the startup
 log lists the enabled ones.
+
+With `[http_api] edit_features = true`, the Module tab of the interface (or `POST /api/features`)
+switches them on and off while running, and saves them to this section of the file: its other
+lines, comments and sections are left as they are. The file must then be writable by the user
+running hottoh_api (`chown hottoh /etc/hottoh_api/config.ini` for the packages). Anyone who can
+reach the API can then enable any feature, so leave it off on a network you do not trust. Without
+configuration file it is on, and changes last until hottoh_api stops.
 
 `wifi_scan` stays disabled unless you need it: during the scan the module suspends its link with
 the stove board, and its firmware mishandles WPA3 networks (see [Wi-Fi scan](API.md#wi-fi-scan)).

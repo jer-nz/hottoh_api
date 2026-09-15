@@ -1,5 +1,56 @@
 # Changelog
 
+## 2.3.0
+
+### Features changed from the interface
+
+- `POST /api/features` enables or disables features while running and saves them to the
+  `[features]` section of `config.ini` (only those lines are rewritten, comments kept). Allowed by the
+  new `[http_api] edit_features` (default: only without configuration file). `GET /api/config` gives
+  the file in use and whether features can be changed.
+- Module tab: a switch for each feature, grouped by topic; the risky ones turn orange.
+
+### Module tab redesigned
+
+- Wi-Fi module card: host name, firmware, signal, address, **stove clock** (on time, or its offset
+  in minutes) and time zone, manufacturer, stove setup.
+- Clock: the stove clock is shown and judged, not the module one, which is only the stove minute
+  plus a counter reset every few seconds; the stove minute changes about 20 s after the real one, so
+  it is not reported late in the first half of a minute. Setting the clock says the module accepted
+  it and warns when the stove is already on time (nothing visible changes then).
+- Nothing is asked to the HottoH servers or the module without a click: the firmware check, the
+  cloud servers and the data logger are read on demand (Details card). Only the clock and time zone
+  are read when the tab opens.
+- Details card: clocks (stove to the minute, computer, offset, module), data logger, cloud and PIN.
+- Tools card: set the clock, time zone, Wi-Fi scan, relay PIN, clear the history, restart the
+  module; a disabled one says which feature to enable.
+
+### Interface fixes
+
+- Phone: the day timeline of the schedule no longer scrolls sideways to reach the afternoon; it is
+  shown as two half days, one above the other. Day tabs and power levels fit on one line.
+- Stove tab: the thermostat dial is grey while the stove is off and orange once it is on; the state
+  no longer repeats "Power level 0 % · 2 s ago". The top bar gives the delay of the last answer of the
+  stove next to the module name and firmware: green under 2 s, orange up to 5 s, red beyond
+  (`latency_last_ms`, new in the `stats` of `/api/status`).
+- Phone: label/value lists put the label above the value; recent requests are compact blocks.
+- Gaps: empty alarm and discovery placeholders no longer add space above the dashboard cards;
+  temperature tiles fill the row.
+
+### Fixes found by a test on a real stove (full ignition and shutdown cycle)
+
+- Web interface: the power applied by the stove (`index_power_level`) is shown in percent, as the
+  stove display does (it showed "100 / 10"); the button of the matching level is marked. Same in
+  the History charts and table.
+- History: the heating time is marked as approximate (records every 15 minutes).
+- `set_ambiance_temp` and `set_chrono_temp`: an out of range temperature is reported in °C
+  (`between 5.0 and 55.0 °C`) instead of tenths, and the answer shows the value sent after rounding
+  to the tenth (`21.25` gives `21.3 °C`).
+- Changes of the chrono program temperatures (DAT page 1) are logged, like those of page 0.
+- The startup log gives the listening address of the web interface (`http://0.0.0.0:80/`) instead
+  of a local URL.
+- API documentation: meaning of `index_power_level`, rounding of temperatures.
+
 ## 2.2.0
 
 ### New: web interface

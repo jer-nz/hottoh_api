@@ -31,6 +31,12 @@ The data pages are read continuously from the stove and served from memory. Temp
 Every page has a `last_updated` timestamp; check `connected` in `/api/status` to detect stale data
 when the stove is unreachable.
 
+In `/api/dat/0`, `index_power_set` is the power level set point (`index_power_min` to
+`index_power_max`), while `index_power_level` is the power applied by the stove **in percent**
+(100 = `index_power_max`). The stove board decides the applied power: after ignition it ramps up in
+steps of 10 %, and it may keep full power while the room is below its set point, whatever
+`index_power_set` says.
+
 ## Controlling the stove
 
 | Endpoint | Body | Accepted values |
@@ -44,7 +50,8 @@ when the stove is unreachable.
 | `POST /api/dat/set_fan_speed` | `{"fan": 1, "value": 3}` | 0 to `index_fan_N_set_max` |
 
 Ranges come from the values reported by the stove once they have been read, and fall back to the
-firmware limits otherwise. An invalid value is refused with HTTP 400.
+firmware limits otherwise. An invalid value is refused with HTTP 400. Temperatures are sent in
+tenths of °C: a value such as `21.25` is rounded to `21.3`, and the answer shows the value sent.
 
 ### Writes are asynchronous
 
@@ -56,7 +63,8 @@ curl -X POST http://192.168.1.10:3000/api/dat/set_ambiance_temp \
 ```
 
 ```json
-{"success": true, "request_id": 71, "status_url": "/api/request/71", "message": "..."}
+{"success": true, "request_id": 71, "status_url": "/api/request/71",
+ "message": "Request added for command: AmbianceTemperature1, value: 21.5 °C, id: 71"}
 ```
 
 `GET /api/request/71` then gives the outcome returned by the stove:
@@ -85,6 +93,8 @@ Writes are asynchronous, like the settings above.
 | Endpoint | Feature | Content |
 |---|---|---|
 | `GET /api/features` | - | Enabled and disabled features |
+| `POST /api/features` | `[http_api] edit_features` | `{"clock_write": true}`: enables or disables features at once and saves them to `config.ini` (`saved_to`); 403 when not allowed |
+| `GET /api/config` | - | `{"file": "/etc/hottoh_api/config.ini", "edit_features": true}`: configuration file in use, whether features can be changed |
 | `GET /api/chrono/schedule` | `chrono_schedule_read` | Weekly schedule (takes about 2 s, see below) |
 | `POST /api/chrono/schedule` | `chrono_schedule_write` | Replaces the schedule of some days |
 | `GET /api/clock` | `clock_read` | Module clock (UTC), stove clock (local), offset from the bridge |
@@ -100,6 +110,22 @@ Writes are asynchronous, like the settings above.
 | `GET /api/wifi/scan` | `wifi_scan` | Networks seen by the module (BSSID, SSID, RSSI, security), strongest first |
 | `GET /api/cloud` | `cloud_read` | HottoH relay balancer (AppFire cloud mode), 4-noks cloud server, last upload |
 | `GET /api/firmware[?refresh=true]` | `firmware_update_check` | Installed firmware, newest one on the HottoH update server, `update_available` |
+
+`POST /api/features` rewrites only the lines of the `[features]` section (missing keys are added
+at its end, comments and other sections are kept). The file must be writable by the user running
+hottoh_api; when it cannot be written, nothing changes (HTTP 500). Without a configuration file,
+changes last until hottoh_api stops.
+
+### Clock
+
+The stove board has a local clock **to the minute**, set by the module after `POST /api/clock` or
+`POST /api/timezone`. The module clock is not an independent reference: seen on firmware 10.5.0, `module_utc` is the
+minute of the stove plus a counter reset every few seconds, so `module_offset_s` (module minus the
+computer running hottoh_api) swings between about 0 and -60 s even right after a write. Compare
+`stove_time` with the local time instead, knowing that its minute changes about 20 s after the real
+one: a stove one minute behind during the first half of a minute is on time. When it is really off,
+send `POST /api/clock {}` (keep the computer running hottoh_api synchronised with NTP); on a stove
+already on time, nothing visible changes.
 
 ### Weekly schedule
 
@@ -129,7 +155,7 @@ no program) or its 48 `slots`. Days left out keep their schedule: the current on
 
 ### Data logger
 
-The module records the stove every 15 minutes: `utc`, `time`, `power_level`, `room_temp`,
+The module records the stove every 15 minutes: `utc`, `time`, `power_level` (%), `room_temp`,
 `water_temp`, `smoke_temp` (°C), `state` and `state_raw` (AppFire shows states 50 to 99 as
 alarms). To read a long period, ask again from the `utc` of the last record plus one; the list is
 empty after the newest record.
@@ -184,6 +210,7 @@ rest:
         device_class: temperature
       - name: Stove power level
         value_template: "{{ value_json.index_power_level }}"
+        unit_of_measurement: "%"
 
 rest_command:
   stove_on_off:

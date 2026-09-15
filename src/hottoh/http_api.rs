@@ -1,4 +1,5 @@
-use crate::hottoh::config::{FeaturesConfig, HttpApiConfig, WebUiConfig};
+use crate::hottoh::config::{HttpApiConfig, WebUiConfig};
+use crate::hottoh::features::FeatureSettings;
 use crate::hottoh::hottoh_const::{ChronoMode, StoveCommands};
 use crate::hottoh::hottoh_structs::{DAT0Data, DAT1Data};
 use crate::hottoh::http_module;
@@ -22,7 +23,6 @@ const FIRMWARE_TEMP_RANGE: RangeInclusive<i32> = 0..=9999;
 const FIRMWARE_POWER_RANGE: RangeInclusive<i32> = 0..=100;
 /// Firmware limits for fan speeds
 const FIRMWARE_FAN_RANGE: RangeInclusive<i32> = 0..=101;
-const TEMP_LABEL: &str = "temperature (tenths of °C)";
 
 /// API Error
 #[derive(Error, Debug)]
@@ -35,6 +35,12 @@ pub enum ApiError {
     QueueFull(usize),
     #[error("Feature '{0}' is disabled: set {0} = true in the [features] section of config.ini")]
     FeatureDisabled(&'static str),
+    #[error(
+        "Changing the features is disabled: set edit_features = true in the [http_api] section of config.ini"
+    )]
+    EditDisabled,
+    #[error("{0}")]
+    Internal(String),
     #[error("Stove refused the request: {message}")]
     Stove { code: Option<i32>, message: String },
     #[error("Invalid answer from the stove: {0}")]
@@ -56,7 +62,13 @@ impl ResponseError for ApiError {
                 warn!("{}", self);
                 HttpResponse::ServiceUnavailable().json(body)
             }
-            ApiError::FeatureDisabled(_) => HttpResponse::Forbidden().json(body),
+            ApiError::FeatureDisabled(_) | ApiError::EditDisabled => {
+                HttpResponse::Forbidden().json(body)
+            }
+            ApiError::Internal(_) => {
+                warn!("{}", self);
+                HttpResponse::InternalServerError().json(body)
+            }
             ApiError::Stove { code, .. } => HttpResponse::BadGateway().json(json!({
                 "success": false,
                 "error": self.to_string(),
@@ -191,15 +203,24 @@ fn tenths(value: f32) -> i32 {
     (value * 10.0).round() as i32
 }
 
-/// Converts °C to the tenths sent to the stove
-fn to_tenths(value: f32) -> Result<i32, ApiError> {
-    if value.is_finite() {
-        Ok(tenths(value))
-    } else {
-        Err(ApiError::InvalidParameter(
+/// Converts °C to the tenths sent to the stove (rounded to the nearest tenth), checked against
+/// `range` (tenths) with the error in °C
+fn to_tenths(value: f32, range: &RangeInclusive<i32>) -> Result<i32, ApiError> {
+    if !value.is_finite() {
+        return Err(ApiError::InvalidParameter(
             "temperature must be a finite number".into(),
-        ))
+        ));
     }
+    let rounded = tenths(value);
+    if !range.contains(&rounded) {
+        return Err(ApiError::InvalidParameter(format!(
+            "temperature must be between {:.1} and {:.1} °C (got {})",
+            f64::from(*range.start()) / 10.0,
+            f64::from(*range.end()) / 10.0,
+            value
+        )));
+    }
+    Ok(rounded)
 }
 
 /// Stove limits in tenths of °C
@@ -360,19 +381,29 @@ async fn post_ambiance_temp(
         }),
     ];
     let (command, limits) = pick("ambiance", body.ambiance, &choices)?;
-    let value = to_tenths(body.value)?;
     let stove_range = bridge
         .state()
         .dat0_if_received()
         .map(|d| tenths_range(limits(d)));
-    queue_write(
-        &bridge,
-        command,
-        TEMP_LABEL,
-        value,
-        stove_range,
-        FIRMWARE_TEMP_RANGE,
-    )
+    let range = effective_range(stove_range, FIRMWARE_TEMP_RANGE);
+    let value = to_tenths(body.value, &range)?;
+    queue_temperature(&bridge, command, value)
+}
+
+/// Queues a temperature already checked by `to_tenths`; the answer shows the value sent, in °C
+fn queue_temperature(
+    bridge: &Bridge,
+    command: StoveCommands,
+    tenths: i32,
+) -> Result<HttpResponse, ApiError> {
+    let request_id = bridge
+        .queue_write(command, tenths)
+        .ok_or(ApiError::QueueFull(MAX_QUEUED))?;
+    Ok(queued_response(
+        request_id,
+        command.name(),
+        &format!("{:.1} °C", f64::from(tenths) / 10.0),
+    ))
 }
 
 /// Activates (`true`) or deactivates (`false`) chrono mode
@@ -413,19 +444,13 @@ async fn post_chrono_temp(
         }),
     ];
     let (command, limits) = pick("chrono", body.chrono, &choices)?;
-    let value = to_tenths(body.value)?;
     let stove_range = bridge
         .state()
         .dat1_if_received()
         .map(|d| tenths_range(limits(d)));
-    queue_write(
-        &bridge,
-        command,
-        TEMP_LABEL,
-        value,
-        stove_range,
-        FIRMWARE_TEMP_RANGE,
-    )
+    let range = effective_range(stove_range, FIRMWARE_TEMP_RANGE);
+    let value = to_tenths(body.value, &range)?;
+    queue_temperature(&bridge, command, value)
 }
 
 /// Sets a fan speed, from 0 to the maximum reported by the stove
@@ -517,7 +542,7 @@ pub(crate) fn configure(cfg: &mut web::ServiceConfig) {
 fn api_server(
     address: &str,
     data: web::Data<Bridge>,
-    features: web::Data<FeaturesConfig>,
+    features: web::Data<FeatureSettings>,
     with_ui: bool,
 ) -> std::io::Result<Server> {
     Ok(HttpServer::new(move || {
@@ -547,7 +572,7 @@ fn api_server(
 pub async fn start_http_server(
     config: &HttpApiConfig,
     web_ui: &WebUiConfig,
-    features: FeaturesConfig,
+    features: FeatureSettings,
     bridge: Arc<Bridge>,
     desktop: bool,
 ) -> std::io::Result<()> {
@@ -587,7 +612,7 @@ pub async fn start_http_server(
     info!("HTTP server on {}", http_address);
     let Some(ui_address) = ui_address else {
         if ui_with_api {
-            info!("Web interface on {}", local_url(&http_address));
+            info!("Web interface on http://{}/", http_address);
             if open_browser {
                 open_in_browser(&local_url(&http_address));
             }
@@ -598,7 +623,7 @@ pub async fn start_http_server(
     };
     // The API is served on the address of the interface too: same origin, no CORS
     let ui = api_server(&ui_address, data, features, true)?;
-    info!("Web interface (with the API) on {}", local_url(&ui_address));
+    info!("Web interface (with the API) on http://{}/", ui_address);
     if open_browser {
         open_in_browser(&local_url(&ui_address));
     }
@@ -709,10 +734,36 @@ mod tests {
 
     #[test]
     fn temperatures_are_rounded_to_tenths() {
-        assert_eq!(to_tenths(21.3).unwrap(), 213);
-        assert_eq!(to_tenths(21.25).unwrap(), 213);
-        assert_eq!(to_tenths(19.94).unwrap(), 199);
-        assert!(to_tenths(f32::NAN).is_err());
+        let range = 50..=550;
+        assert_eq!(to_tenths(21.3, &range).unwrap(), 213);
+        assert_eq!(to_tenths(21.25, &range).unwrap(), 213);
+        assert_eq!(to_tenths(19.94, &range).unwrap(), 199);
+        assert!(to_tenths(f32::NAN, &range).is_err());
+        // Limits are checked after rounding, and reported in °C
+        assert_eq!(to_tenths(55.04, &range).unwrap(), 550);
+        let error = to_tenths(55.5, &range).unwrap_err().to_string();
+        assert_eq!(
+            error,
+            "Invalid parameter: temperature must be between 5.0 and 55.0 °C (got 55.5)"
+        );
+    }
+
+    #[actix_web::test]
+    async fn temperature_answer_shows_the_value_sent() {
+        let bridge = bridge_with_dat0();
+        let (status, body) = post(
+            &bridge,
+            "/api/dat/set_ambiance_temp",
+            json!({"ambiance": 1, "value": 21.25}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            body["message"].as_str().unwrap().contains("value: 21.3 °C"),
+            "{}",
+            body
+        );
+        assert_eq!(bridge.queue()[0].request.get_params(), ["3", "213"]);
     }
 
     #[test]
