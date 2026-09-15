@@ -12,12 +12,16 @@
 
 ### Module tab redesigned
 
-- Wi-Fi module card: host name, firmware, signal, address, **date and time of the module** (running
-  clock, its offset when it drifts) and time zone, manufacturer, stove setup.
+- Wi-Fi module card: host name, firmware, signal, address, **stove clock** (on time, or its offset
+  in minutes) and time zone, manufacturer, stove setup.
+- Clock: the stove clock is shown and judged, not the module one, which is only the stove minute
+  plus a counter reset every few seconds; the stove minute changes about 20 s after the real one, so
+  it is not reported late in the first half of a minute. Setting the clock says the module accepted
+  it and warns when the stove is already on time (nothing visible changes then).
 - Nothing is asked to the HottoH servers or the module without a click: the firmware check, the
   cloud servers and the data logger are read on demand (Details card). Only the clock and time zone
   are read when the tab opens.
-- Details card: clocks (module, computer, stove to the minute, offsets), data logger, cloud and PIN.
+- Details card: clocks (stove to the minute, computer, offset, module), data logger, cloud and PIN.
 - Tools card: set the clock, time zone, Wi-Fi scan, relay PIN, clear the history, restart the
   module; a disabled one says which feature to enable.
 

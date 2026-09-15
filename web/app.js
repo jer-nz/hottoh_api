@@ -62,12 +62,12 @@
       alarms: 'Alarms', table_view: 'Table view', time: 'Time', state: 'State',
       // module
       module_title: 'Wi-Fi module', module_sub: 'HottoH Wifier module of the stove: information, details read on demand, tools and features.',
-      tools: 'Tools', details: 'Details', details_hint: 'Read from the Wi-Fi module only when you ask.', date_time: 'Date and time',
+      tools: 'Tools', details: 'Details', details_hint: 'Read from the Wi-Fi module only when you ask.', date_time: 'Stove clock',
       fw_check_again: 'Check again', on_time: 'on time', on_time_minute: 'on time (to the minute)', late_by: '{d} late', ahead_by: '{d} ahead',
-      clock_hint: 'Read {time}. The stove clock has no seconds and is the reference: the module clock follows it, so its offset in seconds swings within a minute.',
+      clock_hint: 'Read {time}. The stove clock has no seconds and is the reference; its minute changes about 20 s after the computer one. The module clock is only the stove minute plus a short counter.',
       read: 'Read', not_read: 'Not read yet.', records_title: 'Records',
-      tool_off: 'Disabled, enable', sync_clock_desc: 'Sets the module and stove clocks to the computer running hottoh_api.', stove_is: 'Stove: {state}.', stove_pill: 'stove {state}',
-      sync: 'Sync', sync_result: 'Stove clock now {state}', tz_desc: 'Current zone: {zone}. The module sets the stove clock to the new local time.',
+      tool_off: 'Disabled, enable', sync_clock_desc: 'Sets the module and stove clocks to the computer running hottoh_api.', stove_is: 'Stove: {state}.',
+      sync: 'Sync', sync_done: 'Clock sent to the module and accepted. The stove shows minutes only: nothing visible changes when it was already on time.', sync_already: 'The stove is already on time to the minute: nothing visible will change.', tz_desc: 'Current zone: {zone}. The module sets the stove clock to the new local time.',
       tz_desc_unknown: 'The module sets the stove clock to the new local time.', wifi_scan_title: 'Wi-Fi networks around the module',
       change_pin_title: 'Cloud relay PIN', restart: 'Restart',
       feature_saved: '{name} {state}, saved to {file}', feature_memory: '{name} {state} until hottoh_api restarts (no config.ini)',
@@ -87,7 +87,7 @@
       stove_config: 'Stove setup', fans_n: '{n} fan(s)', sensors: 'Sensors',
       fw_uptodate: 'Up to date', fw_update: 'Version {v} available', fw_check: 'Check for updates', fw_checked: 'checked {age}',
       fw_hint: 'The update itself is done with the AppFire application.',
-      clocks: 'Clocks', module_clock: 'Module', stove_clock: 'Stove', bridge_clock: 'hottoh_api computer',
+      clocks: 'Clocks', module_clock: 'Module (follows the stove)', stove_clock: 'Stove', bridge_clock: 'hottoh_api computer',
       offset_module: 'Module offset', offset_hint: 'Module offset from the computer running hottoh_api; stove offset from this device.', offset_stove: 'Stove offset', timezone: 'Time zone',
       tz_unknown: 'not known by the firmware', sync_clock: 'Set the clock',
       sync_clock_text: 'The module and stove clocks will be set to the clock of the computer running hottoh_api.',
@@ -200,12 +200,12 @@
       avg: 'moyenne', min: 'min', max: 'max', heating_time: 'Temps de chauffe', heating_time_sub: 'au quart d’heure près', smoke_max: 'Fumées max',
       alarms: 'Alarmes', table_view: 'Vue tableau', time: 'Heure', state: 'État',
       module_title: 'Module Wi-Fi', module_sub: 'Module HottoH Wifier du poêle : informations, détails lus à la demande, outils et fonctions.',
-      tools: 'Outils', details: 'Détails', details_hint: 'Lus dans le module Wi-Fi seulement à votre demande.', date_time: 'Date et heure',
+      tools: 'Outils', details: 'Détails', details_hint: 'Lus dans le module Wi-Fi seulement à votre demande.', date_time: 'Horloge du poêle',
       fw_check_again: 'Vérifier à nouveau', on_time: 'à l’heure', on_time_minute: 'à l’heure (à la minute près)', late_by: 'en retard de {d}', ahead_by: 'en avance de {d}',
-      clock_hint: 'Lu {time}. L’horloge du poêle n’a pas de secondes et fait référence : celle du module la suit, son écart en secondes oscille donc dans la minute.',
+      clock_hint: 'Lu {time}. L’horloge du poêle n’a pas de secondes et fait référence ; sa minute change environ 20 s après celle de l’ordinateur. Celle du module n’est que la minute du poêle plus un court compteur.',
       read: 'Lire', not_read: 'Pas encore lu.', records_title: 'Mesures',
-      tool_off: 'Désactivé, activer', sync_clock_desc: 'Règle les horloges du module et du poêle sur l’ordinateur qui fait tourner hottoh_api.', stove_is: 'Poêle : {state}.', stove_pill: 'poêle {state}',
-      sync: 'Synchroniser', sync_result: 'Horloge du poêle désormais {state}', tz_desc: 'Fuseau actuel : {zone}. Le module règle l’horloge du poêle sur la nouvelle heure locale.',
+      tool_off: 'Désactivé, activer', sync_clock_desc: 'Règle les horloges du module et du poêle sur l’ordinateur qui fait tourner hottoh_api.', stove_is: 'Poêle : {state}.',
+      sync: 'Synchroniser', sync_done: 'Heure envoyée au module et acceptée. Le poêle n’affiche que les minutes : rien ne change à l’écran s’il était déjà à l’heure.', sync_already: 'Le poêle est déjà à l’heure à la minute près : rien ne changera à l’écran.', tz_desc: 'Fuseau actuel : {zone}. Le module règle l’horloge du poêle sur la nouvelle heure locale.',
       tz_desc_unknown: 'Le module règle l’horloge du poêle sur la nouvelle heure locale.', wifi_scan_title: 'Réseaux Wi-Fi autour du module',
       change_pin_title: 'PIN du relais cloud', restart: 'Redémarrer',
       feature_saved: '{name} {state}, enregistré dans {file}', feature_memory: '{name} {state} jusqu’au redémarrage de hottoh_api (pas de config.ini)',
@@ -221,7 +221,7 @@
       stove_config: 'Équipement', fans_n: '{n} ventilateur(s)', sensors: 'Sondes',
       fw_uptodate: 'À jour', fw_update: 'Version {v} disponible', fw_check: 'Rechercher une mise à jour', fw_checked: 'vérifié {age}',
       fw_hint: 'La mise à jour elle-même se fait avec l’application AppFire.',
-      clocks: 'Horloges', module_clock: 'Module', stove_clock: 'Poêle', bridge_clock: 'Ordinateur hottoh_api',
+      clocks: 'Horloges', module_clock: 'Module (suit le poêle)', stove_clock: 'Poêle', bridge_clock: 'Ordinateur hottoh_api',
       offset_module: 'Écart du module', offset_hint: 'Écart du module par rapport à l’ordinateur qui fait tourner hottoh_api ; du poêle par rapport à cet appareil.', offset_stove: 'Écart du poêle', timezone: 'Fuseau horaire',
       tz_unknown: 'inconnu du firmware', sync_clock: 'Régler l’horloge',
       sync_clock_text: 'Les horloges du module et du poêle vont être réglées sur celle de l’ordinateur qui fait tourner hottoh_api.',
@@ -1789,8 +1789,13 @@
       renderAll();
     }
 
-    /** Current clock of the module, advanced since it was read */
-    const moduleNow = () => (data.clock?.module_utc ? new Date(data.clock.module_utc * 1000 + Date.now() - data.clockAt) : null);
+    /** Stove clock (local wall time to the minute), advanced since it was read */
+    const stoveNow = () => (data.clock?.stove_local ? new Date(data.clock.stove_local * 1000 + Date.now() - data.clockAt) : null);
+    /** Local wall time of the stove: its seconds are a local time, shown as is */
+    const wallDate = (date) => {
+      if (!date) return '—';
+      return date.toLocaleString(lang, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' });
+    };
     const clockDate = (date, withSeconds) => {
       if (!date) return '—';
       try {
@@ -1800,24 +1805,25 @@
         return fmtDateTime(date, withSeconds);
       }
     };
-    const offsetText = (sec) => (Math.abs(sec) < 2 ? t('on_time') : t(sec < 0 ? 'late_by' : 'ahead_by', { d: fmtDuration(Math.abs(sec)) }));
     /**
      * Stove clock minus the local time of the bridge, in whole minutes: the stove has no seconds.
-     * The module clock is no reference: it follows the stove clock, snapping back to its minute.
+     * The module clock is no reference: it is the stove minute plus a counter reset every few
+     * seconds. The stove minute changes about 20 s after the computer one (seen on 10.5.0), so one
+     * minute behind in the first half of the minute is on time.
      */
     function stoveOffsetMinutes(clock) {
       if (!clock?.stove_local || !clock.bridge_utc) return null;
       const bridgeLocal = clock.bridge_utc + rfcOffset(clock.module_time);
       const diff = Math.floor(clock.stove_local / 60) - Math.floor(bridgeLocal / 60);
       // The stove minute may not be read again yet just after the minute changed
-      return diff === -1 && bridgeLocal % 60 < 15 ? 0 : diff;
+      return diff === -1 && bridgeLocal % 60 < 30 ? 0 : diff;
     }
     const minutesText = (min) => (min === 0 ? t('on_time_minute') : t(min < 0 ? 'late_by' : 'ahead_by', { d: `${Math.abs(min)} min` }));
 
     // ---- Wi-Fi module
 
     const clockValue = h('span', { class: 'num' });
-    function tickClock() { clockValue.textContent = clockDate(moduleNow(), true); }
+    function tickClock() { clockValue.textContent = wallDate(stoveNow()); }
 
     function renderModule() {
       const inf = store.inf || {}, d0 = store.dat0 || {};
@@ -1844,7 +1850,7 @@
       else {
         const stoveOffset = stoveOffsetMinutes(data.clock);
         clockRow = h('span', { class: 'row', style: { gap: '4px 8px' } }, clockValue,
-          stoveOffset ? h('span', { class: 'pill pill-warn', title: t('stove_clock'), text: t('stove_pill', { state: minutesText(stoveOffset) }) }) : null);
+          stoveOffset ? h('span', { class: 'pill pill-warn', text: minutesText(stoveOffset) }) : h('span', { class: 'pill pill-good', text: t('on_time') }));
         tickClock();
       }
       if (feature('timezone_read') && data.tz) {
@@ -1914,11 +1920,10 @@
       const stoveOffset = stoveOffsetMinutes(clock);
       const stoveDate = parseDate(clock.stove_time);
       return [kv([
-        [t('module_clock'), clockDate(clock.module_utc ? new Date(clock.module_utc * 1000) : null, true)],
-        [t('bridge_clock'), clockDate(new Date(clock.bridge_utc * 1000), true)],
-        [t('offset_module'), clock.module_offset_s === null ? '—' : offsetText(clock.module_offset_s)],
         [t('stove_clock'), stoveDate ? stoveDate.toLocaleString(lang, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—'],
-        [t('offset_stove'), stoveOffset === null ? '—' : minutesText(stoveOffset)]
+        [t('bridge_clock'), clockDate(new Date(clock.bridge_utc * 1000), true)],
+        [t('offset_stove'), stoveOffset === null ? '—' : minutesText(stoveOffset)],
+        [t('module_clock'), clockDate(clock.module_utc ? new Date(clock.module_utc * 1000) : null, true)]
       ]), h('p', { class: 'muted small', text: t('clock_hint', { time: fmtDateTime(new Date(data.clockAt), true) }) })];
     }
 
@@ -1981,15 +1986,18 @@
         desc: stoveOffset !== null ? `${t('sync_clock_desc')} ${t('stove_is', { state: minutesText(stoveOffset) })}` : t('sync_clock_desc'),
         featureName: 'clock_write',
         control: (enabled) => h('button', { class: 'btn btn-sm', type: 'button', disabled: !enabled, onclick: async (event) => {
-          if (!(await confirmDialog({ title: t('sync_clock'), text: t('sync_clock_text') }))) return;
-          event.target.closest('button').disabled = true;
-          if ((await command('api/clock', {}, t('sync_clock'))).status === 'ok') {
-            // The module sets the stove clock right after its own
+          const already = stoveOffset === 0;
+          if (!(await confirmDialog({ title: t('sync_clock'), text: t('sync_clock_text') + (already ? ' ' + t('sync_already') : '') }))) return;
+          const button = event.target.closest('button');
+          button.disabled = true;
+          const outcome = await command('api/clock', {}, t('sync_clock'));
+          if (outcome.status === 'ok') {
+            // Accepted by the module, which sets the stove clock; the stove only shows minutes
+            showToast(t('sync_done'), 'ok', 9000);
             await sleep(2500);
             await loadClock();
-            if (data.clock) showToast(t('sync_result', { state: minutesText(stoveOffsetMinutes(data.clock)) }), 'ok', 6000);
           }
-          renderTools();
+          renderAll();
         } }, icon('clock'), t('sync'))
       }));
 

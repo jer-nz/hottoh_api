@@ -119,11 +119,13 @@ changes last until hottoh_api stops.
 ### Clock
 
 The stove board has a local clock **to the minute**, set by the module after `POST /api/clock` or
-`POST /api/timezone`. The module clock is not an independent reference: seen on firmware 10.5.0, it
-barely advances between reads and snaps back to the minute of the stove, so `module_offset_s`
-(module minus the computer running hottoh_api) swings between about 0 and -60 s even right after a
-write. Compare `stove_time` with the local time instead: when the stove is a minute or more off,
-send `POST /api/clock {}` (keep the computer running hottoh_api synchronised with NTP).
+`POST /api/timezone`. The module clock is not an independent reference: seen on firmware 10.5.0, `module_utc` is the
+minute of the stove plus a counter reset every few seconds, so `module_offset_s` (module minus the
+computer running hottoh_api) swings between about 0 and -60 s even right after a write. Compare
+`stove_time` with the local time instead, knowing that its minute changes about 20 s after the real
+one: a stove one minute behind during the first half of a minute is on time. When it is really off,
+send `POST /api/clock {}` (keep the computer running hottoh_api synchronised with NTP); on a stove
+already on time, nothing visible changes.
 
 ### Weekly schedule
 
