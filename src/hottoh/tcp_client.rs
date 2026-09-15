@@ -12,7 +12,7 @@
 use crate::hottoh::discovery;
 use crate::hottoh::hottoh_const::{Command, CommandType, error_message};
 use crate::hottoh::hottoh_structs::now;
-use crate::hottoh::hottoh_structs::{CommandData, DAT0Data, INFData};
+use crate::hottoh::hottoh_structs::{CommandData, DAT0Data, DAT1Data, INFData};
 use crate::hottoh::module_data::Outcome;
 use crate::hottoh::shared_struct::{Bridge, QueuedRequest, RequestState};
 use crate::hottoh::tcp_client_structs::{FrameBuffer, Request, Response};
@@ -688,6 +688,7 @@ impl TcpClient {
                     changed
                 }
                 CommandData::Dat1(data) => {
+                    log_dat1_changes(state.dat1_if_received(), &data);
                     state.set_dat1(data);
                     false
                 }
@@ -760,6 +761,30 @@ fn log_dat0_changes(old: Option<&DAT0Data>, new: &DAT0Data) {
         index_fan_3_set,
         index_manufacturer,
         index_stove_type,
+    );
+}
+
+/// Logs the chrono program temperatures when first received, then their changes (the chrono
+/// mode is logged with DAT page 0)
+fn log_dat1_changes(old: Option<&DAT1Data>, new: &DAT1Data) {
+    let Some(old) = old else {
+        info!(
+            "Chrono programs: 1 {} °C, 2 {} °C, 3 {} °C",
+            new.index_program_1_temp, new.index_program_2_temp, new.index_program_3_temp
+        );
+        return;
+    };
+    macro_rules! log_changed {
+        ($($field:ident),+ $(,)?) => {$(
+            if old.$field != new.$field {
+                info!("Stove {}: {:?} -> {:?}", stringify!($field), old.$field, new.$field);
+            }
+        )+};
+    }
+    log_changed!(
+        index_program_1_temp,
+        index_program_2_temp,
+        index_program_3_temp,
     );
 }
 

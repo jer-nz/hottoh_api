@@ -37,7 +37,7 @@
       power_on_label: 'Stove on', power_off_label: 'Stove off',
       eco_mode: 'Eco mode', eco_desc: 'Stops the stove when the room is warm enough',
       chrono_mode: 'Chrono mode', chrono_desc: 'Follows the weekly schedule',
-      power_level: 'Power', power_now: 'now {n}', fan: 'Fan {n}', fan_now: 'actual {n}',
+      power_level: 'Power', power_now: 'now {n} %', fan: 'Fan {n}', fan_now: 'actual {n}',
       set_ambiance: 'Room {n} set point {value}', set_power: 'Power {value}', set_fan: 'Fan {n}: {value}',
       set_eco: 'Eco mode {value}', set_chrono: 'Chrono mode {value}', set_program: '{n}: {value}',
       t_room: 'Room', t_room_n: 'Room {n}', t_smoke: 'Smoke', t_water: 'Water', t_puffer: 'Puffer',
@@ -58,7 +58,7 @@
       range_6h: '6 h', range_24h: '24 h', range_3d: '3 days', range_7d: '7 days',
       history_empty: 'No record over this period.',
       records: '{n} records', temperatures: 'Temperatures', power_chart: 'Power level',
-      avg: 'average', min: 'min', max: 'max', heating_time: 'Heating time', smoke_max: 'Smoke max',
+      avg: 'average', min: 'min', max: 'max', heating_time: 'Heating time', heating_time_sub: 'to the quarter hour', smoke_max: 'Smoke max',
       alarms: 'Alarms', table_view: 'Table view', time: 'Time', state: 'State',
       // module
       module_title: 'Wi-Fi module', module_sub: 'HottoH Wifier module, clocks, cloud and maintenance.',
@@ -157,7 +157,7 @@
       power_on_label: 'Allumage du poêle', power_off_label: 'Extinction du poêle',
       eco_mode: 'Mode éco', eco_desc: 'Arrête le poêle quand la pièce est assez chaude',
       chrono_mode: 'Mode chrono', chrono_desc: 'Suit la programmation de la semaine',
-      power_level: 'Puissance', power_now: 'actuelle {n}', fan: 'Ventilateur {n}', fan_now: 'réelle {n}',
+      power_level: 'Puissance', power_now: 'actuelle {n} %', fan: 'Ventilateur {n}', fan_now: 'réelle {n}',
       set_ambiance: 'Consigne pièce {n} à {value}', set_power: 'Puissance {value}', set_fan: 'Ventilateur {n} : {value}',
       set_eco: 'Mode éco {value}', set_chrono: 'Mode chrono {value}', set_program: '{n} : {value}',
       t_room: 'Pièce', t_room_n: 'Pièce {n}', t_smoke: 'Fumées', t_water: 'Eau', t_puffer: 'Ballon tampon',
@@ -176,7 +176,7 @@
       range_6h: '6 h', range_24h: '24 h', range_3d: '3 jours', range_7d: '7 jours',
       history_empty: 'Aucune mesure sur cette période.',
       records: '{n} mesures', temperatures: 'Températures', power_chart: 'Puissance',
-      avg: 'moyenne', min: 'min', max: 'max', heating_time: 'Temps de chauffe', smoke_max: 'Fumées max',
+      avg: 'moyenne', min: 'min', max: 'max', heating_time: 'Temps de chauffe', heating_time_sub: 'au quart d’heure près', smoke_max: 'Fumées max',
       alarms: 'Alarmes', table_view: 'Vue tableau', time: 'Heure', state: 'État',
       module_title: 'Module Wi-Fi', module_sub: 'Module HottoH Wifier, horloges, cloud et maintenance.',
       hostname: 'Nom d’hôte', firmware: 'Firmware', signal: 'Signal', stove_address: 'Adresse', manufacturer: 'Fabricant',
@@ -665,6 +665,12 @@
     };
   }
 
+  /** Power level button matching the power applied by the stove: `index_power_level` is a
+   *  percentage (100 % = `index_power_max`), not a level */
+  function powerStep(d) {
+    return d.index_power_max > 0 ? Math.round(d.index_power_level * d.index_power_max / 100) : null;
+  }
+
   function segmented({ onPick, label }) {
     const root = h('div', { class: 'segmented', role: 'group', 'aria-label': label });
     let key = '';
@@ -957,7 +963,7 @@
       powerButton.setAttribute('aria-label', t(on ? 'turn_off' : 'turn_on'));
       powerButton.title = t(on ? 'turn_off' : 'turn_on');
       stateTitle.textContent = state.label;
-      stateSub.textContent = state.sub || (ready ? `${t('t_power')} ${d.index_power_level} · ${fmtAgo(d.last_updated)}` : '');
+      stateSub.textContent = state.sub || (ready ? `${t('t_power')} ${d.index_power_level} % · ${fmtAgo(d.last_updated)}` : '');
       flame.classList.toggle('burning', state.burning);
       phaseBar.hidden = !state.phase;
       [...phaseBar.children].forEach((el, i) => el.classList.toggle('done', i < (state.phase || 0)));
@@ -968,7 +974,7 @@
       if (ready) {
         const values = [];
         for (let v = d.index_power_min; v <= d.index_power_max && values.length < 20; v++) values.push(v);
-        powerSeg.set(values, power.value(), state.burning ? d.index_power_level : null, power.pending(), false);
+        powerSeg.set(values, power.value(), state.burning ? powerStep(d) : null, power.pending(), false);
         powerLabel.lastChild.textContent = state.burning ? t('power_now', { n: d.index_power_level }) : '';
         for (const f of fanBlocks) {
           const maxSpeed = d[`index_fan_${f.n}_set_max`];
@@ -995,7 +1001,7 @@
         tiles.append(tile('drop', t('t_boiler'), tempValue(d2.index_boiler), t('set_to', { value: fmtTemp(d2.index_boiler_set) })));
       }
       if (d.domestic_hot_water_enabled && received(d2)) tiles.append(tile('drop', t('t_dhw'), tempValue(d2.index_dhw), t('set_to', { value: fmtTemp(d2.index_dhw_set) })));
-      tiles.append(tile('flame', t('t_power'), [String(d.index_power_level), h('small', { text: ' / ' + d.index_power_max })], t('set_to', { value: d.index_power_set })));
+      tiles.append(tile('flame', t('t_power'), [String(d.index_power_level), h('small', { text: ' %' })], t('set_to', { value: `${d.index_power_set} / ${d.index_power_max}` })));
       if (received(d1) && chronoOn) {
         const program = currentProgram();
         if (program) tiles.append(tile('calendar', t('prog_name_' + program), tempValue(programTemp(program)), `${t('program_n', { n: program })} · ${t('chrono_mode')}`));
@@ -1613,20 +1619,20 @@
       const avg = rooms.reduce((a, b) => a + b, 0) / rooms.length;
       body.append(h('div', { class: 'tiles' },
         stat(t('t_room'), fmtTemp(avg), `${t('min')} ${fmtTemp(Math.min(...rooms))} · ${t('max')} ${fmtTemp(Math.max(...rooms))}`),
-        stat(t('heating_time'), fmtDuration(burning * 900)),
+        stat(t('heating_time'), `≈ ${fmtDuration(burning * 900)}`, t('heating_time_sub')),
         stat(t('smoke_max'), fmtTemp(Math.max(...records.map((r) => r.smoke_temp)))),
         stat(t('alarms'), String(alarms.size), [...alarms].map(stateLabelFromRecord).join(', ') || null)));
       body.append(alarmHistoryCard(records));
 
       const css = getComputedStyle(document.documentElement);
       const color = (name) => css.getPropertyValue(name).trim();
-      const stateRow = (i) => [[t('state'), stateLabelFromRecord(records[i].state_raw)], [t('t_power'), String(records[i].power_level)]];
+      const stateRow = (i) => [[t('state'), stateLabelFromRecord(records[i].state_raw)], [t('t_power'), `${records[i].power_level} %`]];
       // One chart per measure: room and smoke temperatures do not share a useful scale
       const charts = [
         { title: t('t_room'), icon: 'thermo', height: 220, series: [{ label: t('t_room'), color: color('--series-1'), values: rooms }], unit: '°C' },
         d0.temp_water_enabled && { title: t('t_water'), icon: 'drop', height: 180, series: [{ label: t('t_water'), color: color('--series-3'), values: records.map((r) => r.water_temp) }], unit: '°C' },
         { title: t('t_smoke'), icon: 'wind', height: 180, series: [{ label: t('t_smoke'), color: color('--series-2'), values: records.map((r) => r.smoke_temp) }], unit: '°C' },
-        { title: t('power_chart'), icon: 'flame', height: 150, step: true, area: true, yMin: 0, digits: 0, series: [{ label: t('t_power'), color: color('--accent'), values: records.map((r) => r.power_level) }] }
+        { title: t('power_chart'), icon: 'flame', height: 150, step: true, area: true, yMin: 0, digits: 0, unit: '%', series: [{ label: t('t_power'), color: color('--accent'), values: records.map((r) => r.power_level) }] }
       ].filter(Boolean);
       for (const chart of charts) {
         const holder = h('div', { class: 'chart' });
@@ -1637,7 +1643,7 @@
         h('thead', null, h('tr', null, [t('time'), t('state'), t('t_power'), t('t_room'), t('t_smoke'), d0.temp_water_enabled && t('t_water')].filter(Boolean).map((x) => h('th', { text: x })))),
         h('tbody', null, records.slice().reverse().map((r) => h('tr', null,
           h('td', { text: fmtDateTime(new Date(r.utc * 1000)) }), h('td', { text: stateLabelFromRecord(r.state_raw) }),
-          h('td', { text: r.power_level }), h('td', { text: fmtTemp(r.room_temp) }), h('td', { text: fmtTemp(r.smoke_temp) }),
+          h('td', { text: `${r.power_level} %` }), h('td', { text: fmtTemp(r.room_temp) }), h('td', { text: fmtTemp(r.smoke_temp) }),
           d0.temp_water_enabled && h('td', { text: fmtTemp(r.water_temp) })))));
       body.append(h('details', { class: 'raw' }, h('summary', null, h('span', { text: t('table_view') })),
         h('div', { class: 'table-wrap', style: { maxHeight: '420px', padding: '0 8px 8px' } }, table)));

@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+Fixes found by a test on a real stove (full ignition and shutdown cycle).
+
+- Web interface: the power applied by the stove (`index_power_level`) is shown in percent, as the
+  stove display does (it showed "100 / 10"); the button of the matching level is marked. Same in
+  the History charts and table.
+- History: the heating time is marked as approximate (records every 15 minutes).
+- `set_ambiance_temp` and `set_chrono_temp`: an out of range temperature is reported in °C
+  (`between 5.0 and 55.0 °C`) instead of tenths, and the answer shows the value sent after rounding
+  to the tenth (`21.25` gives `21.3 °C`).
+- Changes of the chrono program temperatures (DAT page 1) are logged, like those of page 0.
+- The startup log gives the listening address of the web interface (`http://0.0.0.0:80/`) instead
+  of a local URL.
+- API documentation: meaning of `index_power_level`, rounding of temperatures.
+
 ## 2.2.0
 
 ### New: web interface
