@@ -10,13 +10,13 @@ use std::sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
-/// Number of write requests whose outcome is kept for `GET /api/request/{id}`
+/// Number of queued requests whose outcome is kept for `GET /api/request/{id}`
 const REQUEST_HISTORY: usize = 100;
 
-/// Writes waiting for the stove beyond this count are refused (HTTP 503)
-pub const MAX_PENDING_WRITES: usize = 32;
+/// Requests waiting for the stove beyond this count are refused (HTTP 503)
+pub const MAX_QUEUED: usize = 32;
 
-/// Outcome of a write request
+/// Outcome of a queued request (write, or read made on demand)
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RequestState {
@@ -24,7 +24,7 @@ pub enum RequestState {
     Pending,
     /// Sent to the stove, waiting for the answer
     Sent,
-    /// The stove answered `OK;`
+    /// The stove answered `OK;` (or the requested data)
     Ok,
     /// The stove answered `ERR;<code>;`
     Error,
@@ -32,7 +32,7 @@ pub enum RequestState {
     Timeout,
 }
 
-/// Status of a write request, as returned by `GET /api/request/{id}`
+/// Status of a queued request, as returned by `GET /api/request/{id}`
 #[derive(Debug, Serialize, Clone)]
 pub struct RequestStatus {
     pub request_id: u32,
@@ -47,6 +47,10 @@ pub struct RequestStatus {
     pub attempts: u32,
     pub created_at: String,
     pub updated_at: String,
+    /// Parameters of the answer, decoded by the HTTP handler that queued a read. Never
+    /// serialized: some answers are secrets (PIN).
+    #[serde(skip)]
+    pub answer: Vec<String>,
 }
 
 /// Counters since start, exposed in `GET /api/status` and logged periodically
@@ -69,6 +73,12 @@ pub struct Stats {
     pub writes_refused: u64,
     /// Writes abandoned (no answer after all attempts, or expired in the queue)
     pub writes_failed: u64,
+    /// Reads made on demand (schedule, clock, data logger...) answered with data
+    pub reads_ok: u64,
+    /// Reads made on demand answered with `ERR`
+    pub reads_refused: u64,
+    /// Reads made on demand abandoned (no answer, or expired in the queue)
+    pub reads_failed: u64,
     /// Established connections that were lost
     pub disconnections: u64,
     /// Connection attempts that failed
@@ -196,7 +206,7 @@ impl SharedState {
         self.connection.last_response_at = Some(now());
     }
 
-    /// Registers a new write request as pending
+    /// Registers a new queued request as pending
     pub fn track_request(&mut self, request_id: u32, command: &str, value: &str) {
         let timestamp = now();
         let status = RequestStatus {
@@ -209,6 +219,7 @@ impl SharedState {
             attempts: 0,
             created_at: timestamp.clone(),
             updated_at: timestamp,
+            answer: Vec::new(),
         };
         if self.requests.insert(request_id, status).is_none() {
             self.request_order.push_back(request_id);
@@ -239,25 +250,61 @@ impl SharedState {
         }
     }
 
+    /// Keeps the parameters of the answer to a tracked request
+    pub fn set_answer(&mut self, request_id: u32, answer: Vec<String>) {
+        if let Some(status) = self.requests.get_mut(&request_id) {
+            status.answer = answer;
+        }
+    }
+
+    /// Counts the outcome of a queued request in the write or read counters
+    pub fn count_outcome(&mut self, command_type: CommandType, state: &RequestState) {
+        let stats = &mut self.connection.stats;
+        let counter = match (command_type, state) {
+            (CommandType::Read, RequestState::Ok) => &mut stats.reads_ok,
+            (CommandType::Read, RequestState::Error) => &mut stats.reads_refused,
+            (CommandType::Read, _) => &mut stats.reads_failed,
+            (_, RequestState::Ok) => &mut stats.writes_ok,
+            (_, RequestState::Error) => &mut stats.writes_refused,
+            (_, _) => &mut stats.writes_failed,
+        };
+        *counter += 1;
+    }
+
     pub fn get_request(&self, request_id: u32) -> Option<&RequestStatus> {
         self.requests.get(&request_id)
     }
 }
 
-/// Write request waiting to be sent
+/// Request waiting to be sent
 #[derive(Debug)]
-pub struct QueuedWrite {
+pub struct QueuedRequest {
     pub request: Request,
     pub attempts: u32,
     pub queued_at: Instant,
+    /// `false` for a command the module never answers (restart): it is `ok` once sent
+    pub expects_answer: bool,
+}
+
+/// Request to queue, see [`Bridge::queue`]
+#[derive(Debug, Clone)]
+pub struct Job {
+    pub command: Command,
+    pub command_type: CommandType,
+    pub params: Vec<String>,
+    /// Name shown in `/api/request/{id}` and in the log
+    pub label: &'static str,
+    /// Value shown in `/api/request/{id}` (never a secret)
+    pub shown_value: String,
+    pub expects_answer: bool,
 }
 
 /// Everything shared between threads. Locks are never held across a blocking call; when both
-/// are needed, the write queue is locked before the state.
+/// are needed, the queue is locked before the state.
 #[derive(Debug)]
 pub struct Bridge {
     state: RwLock<SharedState>,
-    writes: Mutex<VecDeque<QueuedWrite>>,
+    queue: Mutex<VecDeque<QueuedRequest>>,
     next_id: AtomicU32,
     running: AtomicBool,
     started: Instant,
@@ -274,7 +321,7 @@ impl Bridge {
     pub fn new() -> Self {
         Self {
             state: RwLock::default(),
-            writes: Mutex::default(),
+            queue: Mutex::default(),
             next_id: AtomicU32::new(1),
             running: AtomicBool::new(true),
             started: Instant::now(),
@@ -292,9 +339,9 @@ impl Bridge {
         self.state.write().unwrap_or_else(|p| p.into_inner())
     }
 
-    /// Queue of writes waiting for the stove
-    pub fn writes(&self) -> MutexGuard<'_, VecDeque<QueuedWrite>> {
-        self.writes.lock().unwrap_or_else(|p| p.into_inner())
+    /// Queue of requests waiting for the stove (writes and reads made on demand)
+    pub fn queue(&self) -> MutexGuard<'_, VecDeque<QueuedRequest>> {
+        self.queue.lock().unwrap_or_else(|p| p.into_inner())
     }
 
     /// Next frame id (5 digits on the wire)
@@ -302,24 +349,32 @@ impl Bridge {
         self.next_id.fetch_add(1, Ordering::SeqCst) % 100_000
     }
 
-    /// Queues a write and tracks its outcome. Returns `None` when too many writes are waiting.
+    /// Queues a `DAT W` setting and tracks its outcome. Returns `None` when the queue is full.
     pub fn queue_write(&self, command: StoveCommands, value: i32) -> Option<u32> {
-        let mut writes = self.writes();
-        if writes.len() >= MAX_PENDING_WRITES {
+        self.queue_job(Job {
+            command: Command::Dat,
+            command_type: CommandType::Write,
+            params: vec![(command as u32).to_string(), value.to_string()],
+            label: command.name(),
+            shown_value: value.to_string(),
+            expects_answer: true,
+        })
+    }
+
+    /// Queues any request and tracks its outcome. Returns `None` when the queue is full.
+    pub fn queue_job(&self, job: Job) -> Option<u32> {
+        let mut queue = self.queue();
+        if queue.len() >= MAX_QUEUED {
             return None;
         }
         let request_id = self.next_request_id();
         self.state_mut()
-            .track_request(request_id, command.name(), &value.to_string());
-        writes.push_back(QueuedWrite {
-            request: Request::new(
-                request_id,
-                Command::Dat,
-                CommandType::Write,
-                vec![(command as u32).to_string(), value.to_string()],
-            ),
+            .track_request(request_id, job.label, &job.shown_value);
+        queue.push_back(QueuedRequest {
+            request: Request::new(request_id, job.command, job.command_type, job.params),
             attempts: 0,
             queued_at: Instant::now(),
+            expects_answer: job.expects_answer,
         });
         Some(request_id)
     }
@@ -389,7 +444,7 @@ mod tests {
     #[test]
     fn write_queue_is_bounded() {
         let bridge = Bridge::new();
-        for _ in 0..MAX_PENDING_WRITES {
+        for _ in 0..MAX_QUEUED {
             let id = bridge.queue_write(StoveCommands::PowerLevel, 3).unwrap();
             assert_eq!(
                 bridge.state().get_request(id).unwrap().status,
@@ -397,7 +452,22 @@ mod tests {
             );
         }
         assert!(bridge.queue_write(StoveCommands::PowerLevel, 3).is_none());
-        assert_eq!(bridge.writes().len(), MAX_PENDING_WRITES);
+        assert_eq!(bridge.queue().len(), MAX_QUEUED);
+    }
+
+    #[test]
+    fn outcomes_are_counted_by_kind() {
+        let mut state = SharedState::default();
+        state.count_outcome(CommandType::Write, &RequestState::Ok);
+        state.count_outcome(CommandType::Execute, &RequestState::Timeout);
+        state.count_outcome(CommandType::Read, &RequestState::Ok);
+        state.count_outcome(CommandType::Read, &RequestState::Error);
+        let stats = &state.connection().stats;
+        assert_eq!((stats.writes_ok, stats.writes_failed), (1, 1));
+        assert_eq!(
+            (stats.reads_ok, stats.reads_refused, stats.reads_failed),
+            (1, 1, 0)
+        );
     }
 
     #[test]

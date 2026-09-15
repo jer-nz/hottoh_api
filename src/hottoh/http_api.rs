@@ -1,7 +1,8 @@
-use crate::hottoh::config::HttpApiConfig;
+use crate::hottoh::config::{FeaturesConfig, HttpApiConfig};
 use crate::hottoh::hottoh_const::{ChronoMode, StoveCommands};
 use crate::hottoh::hottoh_structs::{DAT0Data, DAT1Data};
-use crate::hottoh::shared_struct::{Bridge, ConnectionStatus, MAX_PENDING_WRITES};
+use crate::hottoh::http_module;
+use crate::hottoh::shared_struct::{Bridge, ConnectionStatus, MAX_QUEUED};
 use crate::hottoh::stats::{ProcessInfo, process_info};
 use actix_web::{App, HttpResponse, HttpServer, ResponseError, middleware, web};
 use log::{info, warn};
@@ -28,8 +29,16 @@ pub enum ApiError {
     InvalidParameter(String),
     #[error("Not found: {0}")]
     NotFound(String),
-    #[error("Too many writes waiting for the stove ({0}), retry later")]
+    #[error("Too many requests waiting for the stove ({0}), retry later")]
     QueueFull(usize),
+    #[error("Feature '{0}' is disabled: set {0} = true in the [features] section of config.ini")]
+    FeatureDisabled(&'static str),
+    #[error("Stove refused the request: {message}")]
+    Stove { code: Option<i32>, message: String },
+    #[error("Invalid answer from the stove: {0}")]
+    BadAnswer(String),
+    #[error("No answer from the stove: {0}")]
+    StoveTimeout(String),
 }
 
 impl ResponseError for ApiError {
@@ -45,6 +54,17 @@ impl ResponseError for ApiError {
                 warn!("{}", self);
                 HttpResponse::ServiceUnavailable().json(body)
             }
+            ApiError::FeatureDisabled(_) => HttpResponse::Forbidden().json(body),
+            ApiError::Stove { code, .. } => HttpResponse::BadGateway().json(json!({
+                "success": false,
+                "error": self.to_string(),
+                "error_code": code,
+            })),
+            ApiError::BadAnswer(_) => {
+                warn!("{}", self);
+                HttpResponse::BadGateway().json(body)
+            }
+            ApiError::StoveTimeout(_) => HttpResponse::GatewayTimeout().json(body),
         }
     }
 }
@@ -213,20 +233,27 @@ fn queue_write(
     check_range(label, value, &effective_range(stove_range, firmware_range))?;
     let request_id = bridge
         .queue_write(command, value)
-        .ok_or(ApiError::QueueFull(MAX_PENDING_WRITES))?;
+        .ok_or(ApiError::QueueFull(MAX_QUEUED))?;
+    Ok(queued_response(
+        request_id,
+        command.name(),
+        &value.to_string(),
+    ))
+}
+
+/// Answer to a queued write: its id, to follow on `/api/request/{id}`
+pub(crate) fn queued_response(request_id: u32, label: &str, shown_value: &str) -> HttpResponse {
     let message = format!(
         "Request added for command: {}, value: {}, id: {}",
-        command.name(),
-        value,
-        request_id
+        label, shown_value, request_id
     );
     info!("{}", message);
-    Ok(HttpResponse::Ok().json(json!({
+    HttpResponse::Ok().json(json!({
         "success": true,
         "message": message,
         "request_id": request_id,
         "status_url": format!("/api/request/{}", request_id),
-    })))
+    }))
 }
 
 /// Module information
@@ -256,7 +283,7 @@ async fn get_dat2(bridge: Shared) -> HttpResponse {
 /// Connection with the stove, counters since start and process resources
 #[utoipa::path(get, path = "/api/status", responses((status = 200)), tag = "hottoh")]
 async fn get_status(bridge: Shared) -> HttpResponse {
-    let pending_writes = bridge.writes().len();
+    let pending_writes = bridge.queue().len();
     let state = bridge.state();
     HttpResponse::Ok().json(StatusResponse {
         connection: state.connection(),
@@ -268,7 +295,7 @@ async fn get_status(bridge: Shared) -> HttpResponse {
     })
 }
 
-/// Outcome of a write request: pending, sent, ok, error (with the stove error code) or timeout
+/// Outcome of a queued request: pending, sent, ok, error (with the stove error code) or timeout
 #[utoipa::path(
     get,
     path = "/api/request/{id}",
@@ -442,7 +469,9 @@ async fn post_power_level(
 }
 
 /// Routes, JSON error handling and Swagger UI
-fn configure(cfg: &mut web::ServiceConfig) {
+pub(crate) fn configure(cfg: &mut web::ServiceConfig) {
+    let mut openapi = ApiDoc::openapi();
+    openapi.merge(http_module::ModuleApiDoc::openapi());
     cfg.app_data(web::JsonConfig::default().error_handler(|err, _req| {
         let message = err.to_string();
         warn!("Invalid JSON body: {}", message);
@@ -452,7 +481,7 @@ fn configure(cfg: &mut web::ServiceConfig) {
         )
         .into()
     }))
-    .service(SwaggerUi::new("/swagger-ui/{_:.*}").url("/api-docs/openapi.json", ApiDoc::openapi()))
+    .service(SwaggerUi::new("/swagger-ui/{_:.*}").url("/api-docs/openapi.json", openapi))
     .route("/api/inf", web::get().to(get_inf))
     .route("/api/dat/0", web::get().to(get_dat0))
     .route("/api/dat/1", web::get().to(get_dat1))
@@ -468,19 +497,26 @@ fn configure(cfg: &mut web::ServiceConfig) {
     .route("/api/dat/set_chrono_mode", web::post().to(post_chrono_mode))
     .route("/api/dat/set_chrono_temp", web::post().to(post_chrono_temp))
     .route("/api/dat/set_fan_speed", web::post().to(post_fan_speed))
-    .route("/api/dat/set_power_level", web::post().to(post_power_level));
+    .route("/api/dat/set_power_level", web::post().to(post_power_level))
+    .configure(http_module::configure);
 }
 
 /// Runs the HTTP server until SIGINT or SIGTERM (handled by actix-web)
-pub async fn start_http_server(config: &HttpApiConfig, bridge: Arc<Bridge>) -> std::io::Result<()> {
+pub async fn start_http_server(
+    config: &HttpApiConfig,
+    features: FeaturesConfig,
+    bridge: Arc<Bridge>,
+) -> std::io::Result<()> {
     let http_address = format!("{}:{}", config.ip, config.port);
     info!("Starting HTTP server on {}", http_address);
     let data = web::Data::from(bridge);
+    let features = web::Data::new(features);
     HttpServer::new(move || {
         App::new()
             .wrap(middleware::Logger::default())
             .wrap(middleware::Compress::default())
             .app_data(data.clone())
+            .app_data(features.clone())
             .configure(configure)
     })
     .shutdown_timeout(5)
@@ -562,7 +598,7 @@ mod tests {
         let (status, body) = post(&bridge, "/api/dat/set_power_level", json!({"value": 3})).await;
         assert_eq!(status, StatusCode::OK);
         let id = body["request_id"].as_u64().unwrap();
-        assert_eq!(bridge.writes()[0].request.get_params(), ["2", "3"]);
+        assert_eq!(bridge.queue()[0].request.get_params(), ["2", "3"]);
 
         let (status, body) = call(
             &bridge,
@@ -604,7 +640,7 @@ mod tests {
             assert_eq!(status, StatusCode::BAD_REQUEST, "{} {}", path, body);
             assert_eq!(response["success"], false);
         }
-        assert!(bridge.writes().is_empty());
+        assert!(bridge.queue().is_empty());
     }
 
     #[actix_web::test]
@@ -612,7 +648,7 @@ mod tests {
         let bridge = Arc::new(Bridge::new());
         post(&bridge, "/api/dat/set_chrono_mode", json!({"value": true})).await;
         post(&bridge, "/api/dat/set_chrono_mode", json!({"value": false})).await;
-        let writes = bridge.writes();
+        let writes = bridge.queue();
         assert_eq!(writes[0].request.get_params(), ["8", "2"]);
         assert_eq!(writes[1].request.get_params(), ["8", "0"]);
     }
@@ -620,7 +656,7 @@ mod tests {
     #[actix_web::test]
     async fn full_queue_answers_503() {
         let bridge = Arc::new(Bridge::new());
-        for _ in 0..MAX_PENDING_WRITES {
+        for _ in 0..MAX_QUEUED {
             bridge.queue_write(StoveCommands::EcoMode, 1).unwrap();
         }
         let (status, body) = post(&bridge, "/api/dat/set_eco_mode", json!({"value": true})).await;

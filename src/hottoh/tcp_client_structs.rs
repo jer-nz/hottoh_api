@@ -11,7 +11,7 @@
 
 use crate::hottoh::hottoh_const::{Command, CommandType};
 use crate::hottoh::hottoh_structs::{
-    CommandData, DAT0Data, DAT1Data, DAT2Data, DataError, INFData, WriteResult, calculate_checksum,
+    CommandData, DAT0Data, DAT1Data, DAT2Data, DataError, INFData, calculate_checksum,
 };
 use std::str::FromStr;
 use thiserror::Error;
@@ -111,8 +111,10 @@ pub struct Response {
 
 impl Response {
     /// Decodes one complete frame (including the trailing `\n`). Never panics.
+    /// Parameters may be empty: the data logger answers nothing but the frame when it has no
+    /// record to send.
     pub fn from_message(message: &[u8]) -> Result<Response, ProtocolError> {
-        if message.len() < FRAME_OVERHEAD + 1 {
+        if message.len() < FRAME_OVERHEAD {
             return Err(ProtocolError::TooShort(message.len()));
         }
         if !message.is_ascii() {
@@ -181,7 +183,6 @@ impl Response {
         self.req_id
     }
 
-    #[cfg(test)]
     pub fn get_command(&self) -> Command {
         self.command
     }
@@ -191,19 +192,15 @@ impl Response {
         self.command_type
     }
 
-    #[cfg(test)]
     pub fn get_params(&self) -> &[String] {
         &self.params
     }
 
-    /// Decodes the parameters according to the command. DAT pages are identified by their
-    /// first field (the page number), not by their field count.
+    /// Decodes a polled page (INF, DAT R). DAT pages are identified by their first field (the
+    /// page number), not by their field count.
     pub fn command_data(&self) -> Result<CommandData, ProtocolError> {
         match (self.command, self.command_type) {
             (Command::Inf, _) => Ok(CommandData::Inf(INFData::from_slice(&self.params)?)),
-            (Command::Dat, CommandType::Write) => {
-                Ok(CommandData::Write(WriteResult::from_slice(&self.params)?))
-            }
             (Command::Dat, CommandType::Read) => match self.params.first().map(String::as_str) {
                 Some("0") => Ok(CommandData::Dat0(DAT0Data::from_slice(&self.params)?)),
                 Some("1") => Ok(CommandData::Dat1(DAT1Data::from_slice(&self.params)?)),
@@ -267,6 +264,7 @@ impl FrameBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hottoh::module_data::Outcome;
 
     const INF_FRAME: &[u8] = b"#00001C---0014INFRHOTTOH32;10.5.0;196;BEA1\n";
 
@@ -310,18 +308,28 @@ mod tests {
 
     #[test]
     fn write_answers_are_decoded() {
-        for (params, expected) in [
-            ("OK;", WriteResult::Ok),
-            ("ERR;17;", WriteResult::Error(17)),
-        ] {
+        for (params, expected) in [("OK;", Outcome::Ok), ("ERR;17;", Outcome::Error(Some(17)))] {
             let body = format!("00007C---{:04X}DATW{}", params.len(), params);
             let frame = format!("#{}{}\n", body, calculate_checksum(&body));
             let resp = Response::from_message(frame.as_bytes()).unwrap();
-            match resp.command_data().unwrap() {
-                CommandData::Write(result) => assert_eq!(result, expected),
-                other => panic!("unexpected {:?}", other),
-            }
+            assert_eq!(Outcome::from_params(resp.get_params()), Some(expected));
+            assert!(resp.command_data().is_err());
         }
+    }
+
+    #[test]
+    fn empty_and_quoted_answers_are_parsed() {
+        let body = "00009C---0000METR";
+        let frame = format!("#{}{}\n", body, calculate_checksum(body));
+        let resp = Response::from_message(frame.as_bytes()).unwrap();
+        assert_eq!(resp.get_command(), Command::Met);
+        assert!(resp.get_params().is_empty());
+
+        let params = r#"\"Europe/Paris\";"#;
+        let body = format!("00010C---{:04X}TMZR{}", params.len(), params);
+        let frame = format!("#{}{}\n", body, calculate_checksum(&body));
+        let resp = Response::from_message(frame.as_bytes()).unwrap();
+        assert_eq!(resp.get_params(), [r#"\"Europe/Paris\""#]);
     }
 
     #[test]

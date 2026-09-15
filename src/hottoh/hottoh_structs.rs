@@ -355,45 +355,13 @@ impl DAT2Data {
     }
 }
 
-/// Answer to a `DAT W` frame
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum WriteResult {
-    /// `OK;`
-    Ok,
-    /// `ERR;<code>;`
-    Error(i32),
-}
-
-impl WriteResult {
-    pub fn from_slice(data: &[String]) -> Result<Self, DataError> {
-        match data {
-            [ok] if ok == "OK" => Ok(WriteResult::Ok),
-            [err, code] if err == "ERR" => {
-                code.parse::<i32>()
-                    .map(WriteResult::Error)
-                    .map_err(|_| DataError::InvalidField {
-                        page: "DAT W",
-                        field: "error code",
-                        value: code.clone(),
-                    })
-            }
-            _ => Err(DataError::InvalidField {
-                page: "DAT W",
-                field: "answer",
-                value: data.join(";"),
-            }),
-        }
-    }
-}
-
-/// Decoded content of a response
+/// Decoded content of a polled page
 #[derive(Debug)]
 pub enum CommandData {
     Inf(INFData),
     Dat0(DAT0Data),
     Dat1(DAT1Data),
     Dat2(DAT2Data),
-    Write(WriteResult),
 }
 
 /// CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF, no reflection, no final XOR),
@@ -503,15 +471,5 @@ mod tests {
                 ..
             })
         ));
-    }
-
-    #[test]
-    fn write_answers() {
-        assert_eq!(WriteResult::from_slice(&fields("OK")), Ok(WriteResult::Ok));
-        assert_eq!(
-            WriteResult::from_slice(&fields("ERR;17")),
-            Ok(WriteResult::Error(17))
-        );
-        assert!(WriteResult::from_slice(&fields("NOPE")).is_err());
     }
 }

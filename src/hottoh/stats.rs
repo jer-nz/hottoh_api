@@ -49,7 +49,7 @@ pub fn spawn_reporter(bridge: Arc<Bridge>, interval: Duration) -> Option<thread:
                 if !bridge.is_running() {
                     break;
                 }
-                let pending_writes = bridge.writes().len();
+                let pending_writes = bridge.queue().len();
                 let connection = bridge.state().connection().clone();
                 info!(
                     "{}",
@@ -102,9 +102,9 @@ fn report(
     format!(
         "Stats over {} s: {} requests, {} answers, {} timeouts, {} invalid frames, \
          {} late answers, {} decode errors, writes {} ok/{} refused/{} failed, \
-         latency avg {} ms | since start ({}): {} connections, {} disconnections, \
+         reads on demand {} ok/{} refused/{} failed, latency avg {} ms | since start ({}): {} connections, {} disconnections, \
          {} failed connects, {} timeouts, latency max {} ms | connected {}, \
-         last answer {}, {} pending writes | rss {} kB, {} threads, {} fds",
+         last answer {}, {} queued requests | rss {} kB, {} threads, {} fds",
         period.as_secs(),
         delta(|s| s.requests),
         answers,
@@ -115,6 +115,9 @@ fn report(
         delta(|s| s.writes_ok),
         delta(|s| s.writes_refused),
         delta(|s| s.writes_failed),
+        delta(|s| s.reads_ok),
+        delta(|s| s.reads_refused),
+        delta(|s| s.reads_failed),
         latency_avg,
         human_duration(uptime),
         connection.connections,

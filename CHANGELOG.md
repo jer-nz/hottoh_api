@@ -1,5 +1,36 @@
 # Changelog
 
+## 2.1.0
+
+### New: Wi-Fi module features
+
+Commands of the module found in its firmware 10.5.0 and in the AppFire application, each one
+enabled or disabled in the new `[features]` section of `config.ini` (HTTP 403 when disabled).
+
+- Weekly chrono schedule: `GET` and `POST /api/chrono/schedule`, as half-hour slots or time
+  ranges per day; days left out of a `POST` are kept.
+- Clocks: `GET /api/clock` (module, stove, offset from the bridge); `POST /api/clock` sets the
+  module and stove clocks (disabled by default).
+- Time zone: `GET /api/timezone`; `POST /api/timezone` (disabled by default).
+- Data logger: `GET /api/datalog/info`, `GET /api/datalog?from=&count=` (history recorded by the
+  module every 15 minutes); `POST /api/datalog/clear` (disabled by default).
+- Cloud relay PIN: `GET /api/pin`; `POST /api/pin` (disabled by default).
+- `POST /api/module/restart` (disabled by default).
+- Wi-Fi scan: `GET /api/wifi/scan` (disabled by default: suspends the stove link, and the firmware
+  mishandles WPA3 networks).
+- Cloud settings: `GET /api/cloud` (HottoH relay balancer, 4-noks cloud server, last upload).
+- Firmware update check: `GET /api/firmware` asks the HottoH update server whether a newer module
+  firmware is published.
+- `GET /api/features`.
+
+### Changes
+
+- Reads made on demand go through the same queue as the writes: `/api/status` counts them in
+  `stats.reads_ok`, `reads_refused` and `reads_failed`, and the `Stats` log line shows them.
+- The PIN never appears in the log (frames are redacted, even at `debug` level) nor in
+  `/api/request/{id}`.
+- An answer without parameters (empty data logger) is accepted.
+
 ## 2.0.0
 
 Follows 1.0.0 (April 2025, published from 0.1.0 sources). The major version reflects the breaking

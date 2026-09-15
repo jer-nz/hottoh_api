@@ -22,6 +22,8 @@ and error codes).
   (counters, latency, memory, threads, file descriptors)
 - RESTful HTTP API with Swagger documentation
 - Asynchronous writes with status tracking (`/api/request/{id}`)
+- Weekly chrono schedule, module and stove clocks, time zone, history recorded by the module
+  (data logger), cloud relay PIN and module restart, each one enabled or disabled in `[features]`
 - Connection monitoring (`/api/status`)
 - Very low CPU and memory usage (about 10 MiB)
 
@@ -105,7 +107,28 @@ max_log_files = 7       # rotated log files to keep
 compress = false        # optional, gzip rotated files (the previous one stays plain)
 max_file_size_mb = 100  # optional, also rotate when the file grows beyond this size
 stats_interval_s = 3600 # optional, statistics line in the log (0 = disabled)
+
+[features]              # optional section, defaults shown
+chrono_schedule_read = true
+chrono_schedule_write = true
+clock_read = true
+clock_write = false
+timezone_read = true
+timezone_write = false
+datalog_read = true
+datalog_clear = false
+pin_read = true
+pin_write = false
+module_restart = false
+wifi_scan = false
+cloud_read = true
+firmware_update_check = true
 ```
+
+`[features]` gates the [module endpoints](#module-features). Reads and the weekly schedule are
+enabled by default. Features that change the setup of the module (clock, time zone, PIN), delete
+data or restart the module are disabled and must be enabled explicitly; a disabled feature answers
+HTTP 403. `GET /api/features` shows the current settings, the startup log lists the enabled ones.
 
 At `debug` level every exchange with the stove is logged (sent frame, answer, delay), about
 1 GiB per month before compression: use it to investigate a problem or test stability, with
@@ -133,6 +156,9 @@ Swagger UI: `http://localhost:3000/swagger-ui/`
 | `/api/dat/2` | Flow switch, pump, actual fan speeds, puffer/boiler/DHW/room 3 temperatures |
 | `/api/status` | Link with the stove (`connected`, `last_response_at`, `last_error`), `pending_writes`, `uptime_s`, counters (`stats`) and process resources (`process`) |
 | `/api/request/{id}` | Outcome of a write: `pending`, `sent`, `ok`, `error` (with `error_code`) or `timeout` |
+
+The [module features](#module-features) add the weekly schedule, clocks, time zone, data logger
+and PIN.
 
 Temperatures are in °C. Every data page has a `last_updated` timestamp; check `/api/status` to
 detect stale data when the stove is unreachable.
@@ -169,6 +195,89 @@ Writes are asynchronous: the answer comes immediately with a `request_id`.
 Stove error codes: `17` value out of range, `19` the stove board refused the value (Modbus write
 failed). The last 100 requests are kept.
 
+## Module features
+
+These endpoints use commands of the Wi-Fi module found in its firmware (10.5.0) and in the AppFire
+application. Reads are sent to the stove when the endpoint is called and the answer comes back in
+the HTTP response (HTTP 504 if the stove does not answer within 30 s, 502 with `error_code` if it
+refuses). Writes are asynchronous like the settings above.
+
+| Endpoint | Feature | Content |
+|---|---|---|
+| `GET /api/features` | - | Enabled and disabled features |
+| `GET /api/chrono/schedule` | `chrono_schedule_read` | Weekly schedule (takes about 2 s, see below) |
+| `POST /api/chrono/schedule` | `chrono_schedule_write` | Replaces the schedule of some days |
+| `GET /api/clock` | `clock_read` | Module clock (UTC), stove clock (local), offset from the bridge |
+| `POST /api/clock` | `clock_write` | `{}` (clock of the bridge) or `{"utc": 1757930400}`: sets the module and stove clocks |
+| `GET /api/timezone` | `timezone_read` | `{"zone": "Europe/Paris", "known": true}` |
+| `POST /api/timezone` | `timezone_write` | `{"zone": "Europe/Paris"}`, a name offered by AppFire; the module then sets the stove clock |
+| `GET /api/datalog/info` | `datalog_read` | Time of the oldest and newest records |
+| `GET /api/datalog?from=<utc>&count=<n>` | `datalog_read` | Records from the first one at or after `from` (default: one hour ago), `count` 1 to 100 (default 60) |
+| `POST /api/datalog/clear` | `datalog_clear` | Deletes the whole history |
+| `GET /api/pin` | `pin_read` | `{"pin": "..."}`: security PIN of the cloud relay, as set in AppFire |
+| `POST /api/pin` | `pin_write` | `{"pin": "a1b2c3"}` (5 to 10 letters or digits); AppFire in cloud mode must be paired again |
+| `POST /api/module/restart` | `module_restart` | Restarts the Wi-Fi module (no answer, data unavailable for about 15 s) |
+| `GET /api/wifi/scan` | `wifi_scan` | Networks seen by the module (BSSID, SSID, RSSI, security), strongest first |
+| `GET /api/cloud` | `cloud_read` | HottoH relay balancer (AppFire cloud mode), 4-noks cloud server, last upload |
+| `GET /api/firmware[?refresh=true]` | `firmware_update_check` | Installed firmware, newest one on the HottoH update server, `update_available` |
+
+### Weekly schedule
+
+When chrono mode is on (`/api/dat/set_chrono_mode`), the stove follows a weekly schedule of
+half-hour slots, each one running chrono program 1, 2 or 3 (temperatures in `/api/dat/1`) or
+none (0). Days go from `sunday` to `saturday`, as in the firmware.
+
+```json
+{"slot_minutes": 30, "days": [
+  {"day": "monday", "slots": [0, 0, ..., 1, 1, 1, 0, ...], "ranges": [{"start": "06:30", "end": "08:00", "program": 1}]},
+  ...
+]}
+```
+
+The module keeps a copy of the schedule and refreshes it from the stove when asked for it, so
+the bridge reads it twice, 2 s apart, to return the current one.
+
+`POST /api/chrono/schedule` takes the days to change, each with `ranges` (the rest of the day gets
+no program) or its 48 `slots`. Days left out keep their schedule: the current one is read first.
+
+```json
+{"days": [
+  {"day": "monday", "ranges": [{"start": "06:30", "end": "08:00", "program": 1}, {"start": "18:00", "end": "22:30", "program": 2}]},
+  {"day": "sunday", "ranges": []}
+]}
+```
+
+### Data logger
+
+The module records the stove every 15 minutes: `utc`, `time`, `power_level`, `room_temp`,
+`water_temp`, `smoke_temp` (°C), `state` and `state_raw` (AppFire shows states 50 to 99 as
+alarms). To read a long period, ask again from the `utc` of the last record plus one; the list is
+empty after the newest record.
+
+### Wi-Fi scan
+
+`wifi_scan` is disabled by default: during the scan the module suspends its link with the stove
+board for a few seconds, and its table of security names stops before WPA3: a WPA3 or WPA2/WPA3
+network is reported with whatever the module reads past the table (`security: "INVALID"`, the
+text in `security_raw`), and in the worst case the module could crash and restart. Tested on a
+WPA2/WPA3 access point: `security_raw` was `"4"`, no crash, stove link kept.
+The module does not tell which network it uses, nor its Wi-Fi password: no command reads the Wi-Fi
+settings back.
+
+### Firmware update check
+
+The module cannot tell whether a newer firmware exists. The bridge asks the HottoH update server
+(`http://update.hottoh.it/update/upgrade_<major>_<minor>_<patch>.bin`, the files AppFire has the
+module download) whether the next patch, minor and major versions exist, with `HEAD` requests
+over plain HTTP (nothing is downloaded). The result is kept 6 hours. The update itself is not
+started by the bridge: use AppFire.
+
+### Not supported on purpose
+
+The firmware also has commands to change the Wi-Fi settings, update the firmware, register with
+the HottoH cloud and change its servers, and to fill the history with test data. They could
+disconnect or break the module and are not exposed.
+
 ## Protocol notes (firmware 10.5.0)
 
 - Frame: `#<id:5><desc:4><params length:4 hex><CMD:3><R|W|E><params;...;><CRC16:4 hex>\n`,
@@ -179,6 +288,11 @@ failed). The last 100 requests are kept.
   (manual) or `2` (chrono). Indexes 12 and 13 are acknowledged but ignored by this firmware.
 - In DAT page 0, `index_fan_N` repeats the fan set point; actual fan speeds are in page 2
   (`index_fan_N_speed`).
+- Module commands: `SCH` (schedule: `0;` then 7 × 48 programs, Sunday first), `CLK` (`R`:
+  `<module utc>;<stove local time>;`, `W`: `<utc>;`), `TMZ` and `PIN` (strings quoted as `\"...\"`),
+  `ME0` (`<first utc>;<last utc>;`), `MET` (`<from utc>;<count>;`, 6 fields per record, `ERR;6;`
+  when no record), `MEC` (clear), `RST` (restart, no answer). Error codes: `16` data unavailable,
+  `17` missing or out of range, `18` value refused by the module.
 
 ## Logs and stability
 
@@ -196,7 +310,10 @@ failed). The last 100 requests are kept.
 - `src/main.rs` - Application entry point
 - `src/hottoh/` - Main module directory
   - `config.rs` - Configuration handling
-  - `http_api.rs` - HTTP API implementation
+  - `http_api.rs` - HTTP API implementation (data pages and settings)
+  - `http_module.rs` - HTTP endpoints of the module features
+  - `module_data.rs` - Schedule, clock, time zone, data logger, PIN, Wi-Fi scan and cloud answers
+  - `firmware_update.rs` - Check of the HottoH update server
   - `logger.rs` - Logging system
   - `tcp_client.rs` - TCP worker (connection, polling, writes, reconnection)
   - `tcp_client_structs.rs` - Frame encoding/decoding and reassembly

@@ -39,6 +39,11 @@ async fn main() -> std::io::Result<()> {
         config.log.level
     );
 
+    info!(
+        "Enabled module features: {}",
+        config.features.enabled().join(", ")
+    );
+
     let bridge = Arc::new(Bridge::new());
     let worker = TcpClient::new(
         format!("{}:{}", config.stove.ip, config.stove.port),
@@ -52,7 +57,12 @@ async fn main() -> std::io::Result<()> {
     );
 
     // Returns on SIGINT or SIGTERM, or if the address cannot be bound
-    let result = start_http_server(&config.http_api, Arc::clone(&bridge)).await;
+    let result = start_http_server(
+        &config.http_api,
+        config.features.clone(),
+        Arc::clone(&bridge),
+    )
+    .await;
     match &result {
         Ok(()) => info!("HTTP server stopped"),
         Err(e) => error!("HTTP server failed: {}", e),
