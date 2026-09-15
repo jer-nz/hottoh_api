@@ -109,7 +109,7 @@
       last_response: 'Last answer', connections: 'Connections since start', last_error: 'Last error', connected_since: 'Connected since', error_resolved: 'resolved, connected again since {time}',
       process: 'hottoh_api', version: 'Version', started: 'Started', uptime: 'Uptime', memory: 'Memory',
       threads: 'Threads', fds: 'Open files', pending_writes: 'Commands waiting',
-      counters: 'Counters since start', counters_hint: 'A connection lost is a connection that was working; a failed attempt is a connection refused or unanswered (module busy, restarting or off). A few failed attempts right after hottoh_api starts are normal.', latency_avg: 'Average latency', latency_max: 'Max latency',
+      counters: 'Counters since start', counters_hint: 'A connection lost is a connection that was working; a failed attempt is a connection refused or unanswered (module busy, restarting or off). A few failed attempts right after hottoh_api starts are normal.', latency_avg: 'Average latency', latency_max: 'Max latency', latency_last: 'Delay of the last answer of the stove', latency_now: 'Last latency',
       c_requests: 'Messages sent', c_answers: 'Answers', c_timeouts: 'Unanswered', c_invalid_frames: 'Invalid messages',
       c_late_answers: 'Late answers', c_decode_errors: 'Decode errors', c_writes_ok: 'Writes ok',
       c_writes_refused: 'Writes refused', c_writes_failed: 'Writes failed', c_reads_ok: 'Reads ok',
@@ -242,7 +242,7 @@
       last_response: 'Dernière réponse', connections: 'Connexions depuis le démarrage', last_error: 'Dernière erreur', connected_since: 'Connecté depuis', error_resolved: 'résolue, reconnecté depuis le {time}',
       process: 'hottoh_api', version: 'Version', started: 'Démarré', uptime: 'Durée de fonctionnement', memory: 'Mémoire',
       threads: 'Threads', fds: 'Fichiers ouverts', pending_writes: 'Commandes en attente',
-      counters: 'Compteurs depuis le démarrage', counters_hint: 'Une connexion perdue était établie puis s’est coupée ; une tentative échouée est une connexion refusée ou sans réponse (module occupé, en redémarrage ou éteint). Quelques tentatives échouées juste après le démarrage de hottoh_api sont normales.', latency_avg: 'Latence moyenne', latency_max: 'Latence max',
+      counters: 'Compteurs depuis le démarrage', counters_hint: 'Une connexion perdue était établie puis s’est coupée ; une tentative échouée est une connexion refusée ou sans réponse (module occupé, en redémarrage ou éteint). Quelques tentatives échouées juste après le démarrage de hottoh_api sont normales.', latency_avg: 'Latence moyenne', latency_max: 'Latence max', latency_last: 'Délai de la dernière réponse du poêle', latency_now: 'Dernière latence',
       c_requests: 'Messages envoyés', c_answers: 'Réponses', c_timeouts: 'Sans réponse', c_invalid_frames: 'Messages invalides',
       c_late_answers: 'Réponses tardives', c_decode_errors: 'Erreurs de décodage', c_writes_ok: 'Écritures réussies',
       c_writes_refused: 'Écritures refusées', c_writes_failed: 'Écritures échouées', c_reads_ok: 'Lectures réussies',
@@ -2265,6 +2265,7 @@
         countersBody.textContent = '';
         countersBody.append(h('p', { class: 'muted small', style: { marginBottom: '10px' }, text: t('counters_hint') }), h('div', { class: 'stats-grid' },
           h('div', { class: 'stat' }, h('b', { text: stats.answers ? `${fmtNum(stats.latency_total_ms / stats.answers)} ms` : '—' }), h('span', { text: t('latency_avg') })),
+          h('div', { class: 'stat' }, h('b', { text: stats.answers ? `${fmtNum(stats.latency_last_ms ?? 0)} ms` : '—' }), h('span', { text: t('latency_now') })),
           h('div', { class: 'stat' }, h('b', { text: `${fmtNum(stats.latency_max_ms)} ms` }), h('span', { text: t('latency_max') })),
           Object.entries(stats).filter(([k]) => !k.startsWith('latency')).map(([k, v]) =>
             h('div', { class: 'stat' + (bad.has(k) && v > 0 ? ' bad' : '') }, h('b', { text: fmtNum(v) }), h('span', { text: I18N[lang]['c_' + k] ? t('c_' + k) : k })))));
@@ -2500,9 +2501,13 @@
     }
     const inf = store.inf;
     const brand = $('#brand-sub');
-    const age = st?.last_response_at && fresh ? ` · ${fmtDuration(ageSeconds(st.last_response_at))}` : '';
-    brand.textContent = (received(inf) ? `${inf.hostname} · ${inf.version}` : st?.stove_address || '—') + age;
-    brand.title = st?.last_response_at ? `${t('last_response')}${lang === 'fr' ? ' : ' : ': '}${fmtDateTime(parseDate(st.last_response_at), true)}` : '';
+    brand.textContent = received(inf) ? `${inf.hostname} · ${inf.version}` : st?.stove_address || '—';
+    // Delay of the last answer of the stove: green under 2 s, orange up to 5 s, red beyond
+    const latency = st?.stats?.latency_last_ms;
+    if (fresh && st.connected && latency !== undefined && st.stats.answers > 0) {
+      const tone = latency < 2000 ? 'good' : latency <= 5000 ? 'warn' : 'crit';
+      brand.append(' · ', h('span', { class: `latency ${tone}`, title: t('latency_last'), text: `${fmtNum(latency)} ms` }));
+    }
     $('#footer-version').textContent = st ? `hottoh_api ${st.version}` : 'hottoh_api';
   }
 

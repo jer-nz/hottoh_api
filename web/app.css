@@ -153,7 +153,12 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .brand-mark svg { width: 22px; height: 22px; fill: #fff; }
 .brand-text { display: flex; flex-direction: column; line-height: 1.15; }
 .brand-text strong { font-size: 1.05rem; }
-.brand-text small { color: var(--muted); font-size: 0.78rem; }
+.brand-text small { color: var(--muted); font-size: 0.78rem; font-variant-numeric: tabular-nums; }
+.latency { font-weight: 650; }
+.latency::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: currentColor; margin: 0 4px 1px 0; }
+.latency.good { color: var(--good); }
+.latency.warn { color: var(--warn); }
+.latency.crit { color: var(--crit); }
 .topbar-right { display: flex; align-items: center; gap: 8px; }
 
 .icon-btn {

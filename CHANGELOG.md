@@ -30,8 +30,9 @@
 - Phone: the day timeline of the schedule no longer scrolls sideways to reach the afternoon; it is
   shown as two half days, one above the other. Day tabs and power levels fit on one line.
 - Stove tab: the thermostat dial is grey while the stove is off and orange once it is on; the state
-  no longer repeats "Power level 0 % · 2 s ago". The top bar gives the age of the last answer of the
-  stove next to the module name and firmware.
+  no longer repeats "Power level 0 % · 2 s ago". The top bar gives the delay of the last answer of the
+  stove next to the module name and firmware: green under 2 s, orange up to 5 s, red beyond
+  (`latency_last_ms`, new in the `stats` of `/api/status`).
 - Phone: label/value lists put the label above the value; recent requests are compact blocks.
 - Gaps: empty alarm and discovery placeholders no longer add space above the dashboard cards;
   temperature tiles fill the row.
