@@ -102,6 +102,10 @@ pub struct HttpApiConfig {
     pub ip: String,
     /// Port to bind the HTTP server
     pub port: u16,
+    /// Allows `POST /api/features` (and the switches of the web interface) to change the
+    /// `[features]` and save them to the configuration file (default: only without
+    /// configuration file)
+    pub edit_features: Option<bool>,
 }
 
 impl Default for HttpApiConfig {
@@ -109,6 +113,7 @@ impl Default for HttpApiConfig {
         Self {
             ip: "127.0.0.1".into(),
             port: DEFAULT_HTTP_PORT,
+            edit_features: None,
         }
     }
 }
@@ -209,8 +214,8 @@ impl Default for FeaturesConfig {
 }
 
 impl FeaturesConfig {
-    /// Names of the enabled features, for the startup log
-    pub fn enabled(&self) -> Vec<&'static str> {
+    /// Every feature with its current value, in the order of the configuration file
+    pub fn entries(&self) -> [(&'static str, bool); 14] {
         [
             ("chrono_schedule_read", self.chrono_schedule_read),
             ("chrono_schedule_write", self.chrono_schedule_write),
@@ -227,9 +232,35 @@ impl FeaturesConfig {
             ("cloud_read", self.cloud_read),
             ("firmware_update_check", self.firmware_update_check),
         ]
-        .into_iter()
-        .filter_map(|(name, enabled)| enabled.then_some(name))
-        .collect()
+    }
+
+    /// Names of the enabled features, for the startup log
+    pub fn enabled(&self) -> Vec<&'static str> {
+        self.entries()
+            .into_iter()
+            .filter_map(|(name, enabled)| enabled.then_some(name))
+            .collect()
+    }
+
+    /// Setting of a feature by its name
+    pub fn field_mut(&mut self, name: &str) -> Option<&mut bool> {
+        Some(match name {
+            "chrono_schedule_read" => &mut self.chrono_schedule_read,
+            "chrono_schedule_write" => &mut self.chrono_schedule_write,
+            "clock_read" => &mut self.clock_read,
+            "clock_write" => &mut self.clock_write,
+            "timezone_read" => &mut self.timezone_read,
+            "timezone_write" => &mut self.timezone_write,
+            "datalog_read" => &mut self.datalog_read,
+            "datalog_clear" => &mut self.datalog_clear,
+            "pin_read" => &mut self.pin_read,
+            "pin_write" => &mut self.pin_write,
+            "module_restart" => &mut self.module_restart,
+            "wifi_scan" => &mut self.wifi_scan,
+            "cloud_read" => &mut self.cloud_read,
+            "firmware_update_check" => &mut self.firmware_update_check,
+            _ => return None,
+        })
     }
 }
 
@@ -311,6 +342,7 @@ mod tests {
         let api = HttpApiConfig {
             ip: "0.0.0.0".into(),
             port: 3000,
+            ..HttpApiConfig::default()
         };
         let on = |ip: Option<&str>, port| WebUiConfig {
             ip: ip.map(str::to_string),
@@ -365,6 +397,19 @@ mod tests {
         assert!(!config.features.chrono_schedule_write);
         assert!(config.features.datalog_read);
         assert!(!config.features.enabled().contains(&"pin_write"));
+
+        let mut features = FeaturesConfig::default();
+        for (name, value) in FeaturesConfig::default().entries() {
+            let field = features.field_mut(name).unwrap();
+            assert_eq!(*field, value, "{}", name);
+            *field = !value;
+        }
+        assert!(features.entries().iter().all(|(name, value)| {
+            FeaturesConfig::default()
+                .entries()
+                .contains(&(name, !value))
+        }));
+        assert!(features.field_mut("coffee").is_none());
     }
 
     #[test]
@@ -381,6 +426,7 @@ mod tests {
             ("127.0.0.1", 3000)
         );
         assert!(config.web_ui.enabled && config.web_ui.open_browser.is_none());
+        assert!(config.http_api.edit_features.is_none());
         assert_eq!(config.log.level, "info");
         assert!(!config.log.directory.is_empty());
 

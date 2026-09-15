@@ -1,6 +1,7 @@
 mod hottoh;
 
 use hottoh::config::load_config;
+use hottoh::features::FeatureSettings;
 use hottoh::http_api::start_http_server;
 use hottoh::logger::{initialize_logger, log_panics};
 use hottoh::shared_struct::Bridge;
@@ -60,9 +61,15 @@ async fn main() -> std::io::Result<()> {
         config.log.level
     );
 
+    let edit_features = config.http_api.edit_features.unwrap_or(desktop);
     info!(
-        "Enabled module features: {}",
-        config.features.enabled().join(", ")
+        "Enabled module features: {}{}",
+        config.features.enabled().join(", "),
+        if edit_features {
+            " (can be changed from the API)"
+        } else {
+            ""
+        }
     );
 
     let bridge = Arc::new(
@@ -83,7 +90,7 @@ async fn main() -> std::io::Result<()> {
     let result = start_http_server(
         &config.http_api,
         &config.web_ui,
-        config.features.clone(),
+        FeatureSettings::new(config.features.clone(), config.file.clone(), edit_features),
         Arc::clone(&bridge),
         desktop,
     )

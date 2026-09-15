@@ -61,14 +61,35 @@
       avg: 'average', min: 'min', max: 'max', heating_time: 'Heating time', heating_time_sub: 'to the quarter hour', smoke_max: 'Smoke max',
       alarms: 'Alarms', table_view: 'Table view', time: 'Time', state: 'State',
       // module
-      module_title: 'Wi-Fi module', module_sub: 'HottoH Wifier module, clocks, cloud and maintenance.',
+      module_title: 'Wi-Fi module', module_sub: 'HottoH Wifier module of the stove: information, details read on demand, tools and features.',
+      tools: 'Tools', details: 'Details', details_hint: 'Read from the Wi-Fi module only when you ask.', date_time: 'Date and time',
+      fw_check_again: 'Check again', on_time: 'on time', on_time_minute: 'on time (to the minute)', late_by: '{d} late', ahead_by: '{d} ahead',
+      clock_hint: 'Read {time}. The stove clock has no seconds and is the reference: the module clock follows it, so its offset in seconds swings within a minute.',
+      read: 'Read', not_read: 'Not read yet.', records_title: 'Records',
+      tool_off: 'Disabled, enable', sync_clock_desc: 'Sets the module and stove clocks to the computer running hottoh_api.', stove_is: 'Stove: {state}.', stove_pill: 'stove {state}',
+      sync: 'Sync', sync_result: 'Stove clock now {state}', tz_desc: 'Current zone: {zone}. The module sets the stove clock to the new local time.',
+      tz_desc_unknown: 'The module sets the stove clock to the new local time.', wifi_scan_title: 'Wi-Fi networks around the module',
+      change_pin_title: 'Cloud relay PIN', restart: 'Restart',
+      feature_saved: '{name} {state}, saved to {file}', feature_memory: '{name} {state} until hottoh_api restarts (no config.ini)',
+      features_edit_hint: 'Changes apply at once and are saved to the [features] section of config.ini. Features in orange change the module, delete data or disturb the stove link.',
+      features_locked: 'Read only: set edit_features = true in the [http_api] section of config.ini to change them here.',
+      fg_schedule: 'Weekly schedule', fg_clock: 'Clock and time zone', fg_datalog: 'Data logger', fg_cloud: 'Cloud and firmware', fg_module: 'Wi-Fi module',
+      f_chrono_schedule_read: 'Read the schedule', f_chrono_schedule_write: 'Change the schedule', f_clock_read: 'Read the clocks',
+      f_clock_write: 'Set the clock', f_timezone_read: 'Read the time zone', f_timezone_write: 'Change the time zone',
+      f_datalog_read: 'Read the history', f_datalog_clear: 'Clear the history', f_cloud_read: 'Read the cloud servers',
+      f_pin_read: 'Show the relay PIN', f_pin_write: 'Change the relay PIN', f_firmware_update_check: 'Check for firmware updates (update.hottoh.it)',
+      f_wifi_scan: 'Scan Wi-Fi networks', f_module_restart: 'Restart the module',
+      fd_chrono_schedule_read: 'GET /api/chrono/schedule', fd_chrono_schedule_write: 'POST /api/chrono/schedule',
+      fd_clock_read: 'GET /api/clock', fd_clock_write: 'POST /api/clock', fd_timezone_read: 'GET /api/timezone', fd_timezone_write: 'POST /api/timezone',
+      fd_datalog_read: 'GET /api/datalog', fd_datalog_clear: 'POST /api/datalog/clear', fd_cloud_read: 'GET /api/cloud', fd_pin_read: 'GET /api/pin',
+      fd_pin_write: 'POST /api/pin', fd_firmware_update_check: 'GET /api/firmware', fd_wifi_scan: 'GET /api/wifi/scan', fd_module_restart: 'POST /api/module/restart',
       hostname: 'Host name', firmware: 'Firmware', signal: 'Signal', stove_address: 'Address', manufacturer: 'Manufacturer',
       stove_config: 'Stove setup', fans_n: '{n} fan(s)', sensors: 'Sensors',
       fw_uptodate: 'Up to date', fw_update: 'Version {v} available', fw_check: 'Check for updates', fw_checked: 'checked {age}',
       fw_hint: 'The update itself is done with the AppFire application.',
-      clocks: 'Clocks', module_clock: 'Module (UTC)', stove_clock: 'Stove', bridge_clock: 'hottoh_api computer',
+      clocks: 'Clocks', module_clock: 'Module', stove_clock: 'Stove', bridge_clock: 'hottoh_api computer',
       offset_module: 'Module offset', offset_hint: 'Module offset from the computer running hottoh_api; stove offset from this device.', offset_stove: 'Stove offset', timezone: 'Time zone',
-      tz_unknown: 'not known by the firmware', sync_clock: 'Set to the computer time',
+      tz_unknown: 'not known by the firmware', sync_clock: 'Set the clock',
       sync_clock_text: 'The module and stove clocks will be set to the clock of the computer running hottoh_api.',
       apply: 'Apply', tz_apply_text: 'The module will switch to {zone} and set the stove clock.',
       datalog: 'Data logger', first_record: 'Oldest record', last_record: 'Newest record', record_count: 'About {n} records',
@@ -178,14 +199,31 @@
       records: '{n} mesures', temperatures: 'Températures', power_chart: 'Puissance',
       avg: 'moyenne', min: 'min', max: 'max', heating_time: 'Temps de chauffe', heating_time_sub: 'au quart d’heure près', smoke_max: 'Fumées max',
       alarms: 'Alarmes', table_view: 'Vue tableau', time: 'Heure', state: 'État',
-      module_title: 'Module Wi-Fi', module_sub: 'Module HottoH Wifier, horloges, cloud et maintenance.',
+      module_title: 'Module Wi-Fi', module_sub: 'Module HottoH Wifier du poêle : informations, détails lus à la demande, outils et fonctions.',
+      tools: 'Outils', details: 'Détails', details_hint: 'Lus dans le module Wi-Fi seulement à votre demande.', date_time: 'Date et heure',
+      fw_check_again: 'Vérifier à nouveau', on_time: 'à l’heure', on_time_minute: 'à l’heure (à la minute près)', late_by: 'en retard de {d}', ahead_by: 'en avance de {d}',
+      clock_hint: 'Lu {time}. L’horloge du poêle n’a pas de secondes et fait référence : celle du module la suit, son écart en secondes oscille donc dans la minute.',
+      read: 'Lire', not_read: 'Pas encore lu.', records_title: 'Mesures',
+      tool_off: 'Désactivé, activer', sync_clock_desc: 'Règle les horloges du module et du poêle sur l’ordinateur qui fait tourner hottoh_api.', stove_is: 'Poêle : {state}.', stove_pill: 'poêle {state}',
+      sync: 'Synchroniser', sync_result: 'Horloge du poêle désormais {state}', tz_desc: 'Fuseau actuel : {zone}. Le module règle l’horloge du poêle sur la nouvelle heure locale.',
+      tz_desc_unknown: 'Le module règle l’horloge du poêle sur la nouvelle heure locale.', wifi_scan_title: 'Réseaux Wi-Fi autour du module',
+      change_pin_title: 'PIN du relais cloud', restart: 'Redémarrer',
+      feature_saved: '{name} {state}, enregistré dans {file}', feature_memory: '{name} {state} jusqu’au redémarrage de hottoh_api (pas de config.ini)',
+      features_edit_hint: 'Les changements s’appliquent tout de suite et sont enregistrés dans la section [features] de config.ini. En orange : ce qui modifie le module, efface des données ou perturbe la liaison avec le poêle.',
+      features_locked: 'Lecture seule : mettre edit_features = true dans la section [http_api] de config.ini pour les modifier ici.',
+      fg_schedule: 'Programmation', fg_clock: 'Horloge et fuseau', fg_datalog: 'Historique du module', fg_cloud: 'Cloud et firmware', fg_module: 'Module Wi-Fi',
+      f_chrono_schedule_read: 'Lire la programmation', f_chrono_schedule_write: 'Modifier la programmation', f_clock_read: 'Lire les horloges',
+      f_clock_write: 'Régler l’horloge', f_timezone_read: 'Lire le fuseau', f_timezone_write: 'Changer le fuseau',
+      f_datalog_read: 'Lire l’historique', f_datalog_clear: 'Effacer l’historique', f_cloud_read: 'Lire les serveurs cloud',
+      f_pin_read: 'Afficher le PIN du relais', f_pin_write: 'Modifier le PIN du relais', f_firmware_update_check: 'Rechercher les mises à jour (update.hottoh.it)',
+      f_wifi_scan: 'Scanner les réseaux Wi-Fi', f_module_restart: 'Redémarrer le module',
       hostname: 'Nom d’hôte', firmware: 'Firmware', signal: 'Signal', stove_address: 'Adresse', manufacturer: 'Fabricant',
       stove_config: 'Équipement', fans_n: '{n} ventilateur(s)', sensors: 'Sondes',
       fw_uptodate: 'À jour', fw_update: 'Version {v} disponible', fw_check: 'Rechercher une mise à jour', fw_checked: 'vérifié {age}',
       fw_hint: 'La mise à jour elle-même se fait avec l’application AppFire.',
-      clocks: 'Horloges', module_clock: 'Module (UTC)', stove_clock: 'Poêle', bridge_clock: 'Ordinateur hottoh_api',
+      clocks: 'Horloges', module_clock: 'Module', stove_clock: 'Poêle', bridge_clock: 'Ordinateur hottoh_api',
       offset_module: 'Écart du module', offset_hint: 'Écart du module par rapport à l’ordinateur qui fait tourner hottoh_api ; du poêle par rapport à cet appareil.', offset_stove: 'Écart du poêle', timezone: 'Fuseau horaire',
-      tz_unknown: 'inconnu du firmware', sync_clock: 'Régler sur l’heure de l’ordinateur',
+      tz_unknown: 'inconnu du firmware', sync_clock: 'Régler l’horloge',
       sync_clock_text: 'Les horloges du module et du poêle vont être réglées sur celle de l’ordinateur qui fait tourner hottoh_api.',
       apply: 'Appliquer', tz_apply_text: 'Le module va passer en {zone} et régler l’horloge du poêle.',
       datalog: 'Historique du module', first_record: 'Plus ancienne mesure', last_record: 'Plus récente', record_count: 'Environ {n} mesures',
@@ -515,7 +553,7 @@
   // ------------------------------------------------------------------ store & polling
 
   let statusAt = 0;
-  const store = { status: null, inf: null, dat0: null, dat1: null, dat2: null, features: null, alarms: null,
+  const store = { status: null, inf: null, dat0: null, dat1: null, dat2: null, features: null, config: null, alarms: null,
     apiError: null, apiFailures: 0, schedule: null, scheduleAt: 0 };
   const POLL_MS = 2000;
   let pollTimer = null, polling = false, tick = 0;
@@ -529,9 +567,10 @@
       const needInf = !received(store.inf) || tick % 15 === 0;
       const needFeatures = !store.features;
       const previousState = store.dat0?.index_stove_state_raw;
-      const [status, dat0, dat1, dat2, inf, features] = await Promise.all([
+      const [status, dat0, dat1, dat2, inf, features, config] = await Promise.all([
         api('GET', 'api/status'), api('GET', 'api/dat/0'), api('GET', 'api/dat/1'), api('GET', 'api/dat/2'),
-        needInf ? api('GET', 'api/inf') : null, needFeatures ? api('GET', 'api/features') : null
+        needInf ? api('GET', 'api/inf') : null, needFeatures ? api('GET', 'api/features') : null,
+        needFeatures ? api('GET', 'api/config') : null
       ]);
       tick++;
       // A single failed request (network hiccup, tab waking up) is not reported
@@ -547,6 +586,7 @@
       if (dat2.ok) store.dat2 = dat2.data;
       if (inf?.ok) store.inf = inf.data;
       if (features?.ok) store.features = features.data;
+      if (config?.ok) store.config = config.data;
     } finally {
       polling = false;
     }
@@ -671,8 +711,8 @@
     return d.index_power_max > 0 ? Math.round(d.index_power_level * d.index_power_max / 100) : null;
   }
 
-  function segmented({ onPick, label }) {
-    const root = h('div', { class: 'segmented', role: 'group', 'aria-label': label });
+  function segmented({ onPick, label, fill }) {
+    const root = h('div', { class: 'segmented' + (fill ? ' fill' : ''), role: 'group', 'aria-label': label });
     let key = '';
     return {
       el: root,
@@ -884,7 +924,7 @@
     const chronoSwitch = switchControl({ label: t('chrono_mode'), desc: t('chrono_desc'),
       onToggle: (v) => chrono.run(v, (x) => command('api/dat/set_chrono_mode', { value: x }, t('set_chrono', { value: t(x ? 'on' : 'off') }))) });
     const powerLabel = h('div', { class: 'field-label' }, h('span', { text: t('power_level') }), h('span', { class: 'num' }));
-    const powerSeg = segmented({ label: t('power_level'),
+    const powerSeg = segmented({ fill: true, label: t('power_level'),
       onPick: (v) => power.run(v, (x) => command('api/dat/set_power_level', { value: x }, t('set_power', { value: x }))) });
     const fanBlocks = [1, 2, 3].map((n) => {
       const label = h('div', { class: 'field-label' }, h('span', { text: t('fan', { n }) }), h('span', { class: 'num' }));
@@ -1185,10 +1225,14 @@
       editorBody.append(h('div', { class: 'segmented day-tabs', role: 'group' }, DISPLAY_DAYS.map((d) =>
         h('button', { type: 'button', text: dayName(d).slice(0, 3), 'aria-pressed': String(d === day), title: dayName(d), onclick: () => selectDay(d, false) }))));
 
-      // Timeline to draw on
-      const timeline = bar(work[day], 'timeline' + (writable() ? '' : ' readonly'), day);
-      const timelineWrap = h('div', { class: 'timeline-wrap' },
-        h('div', { class: 'timeline-hours' }, Array.from({ length: 13 }, (_, k) => h('span', { text: pad2(k * 2) }))), timeline);
+      // Timeline to draw on: two halves of the day, side by side, one above the other on a phone
+      const cells = bar(work[day], 'timeline-cells', day).children;
+      const slotEls = [...cells];
+      const timeline = h('div', { class: 'timeline' + (writable() ? '' : ' readonly') }, [0, 24].map((from) =>
+        h('div', { class: 'timeline-half' },
+          h('div', { class: 'timeline-hours' }, [0, 2, 4, 6, 8, 10].map((k) => h('span', { text: pad2(from / 2 + k) }))),
+          h('div', { class: 'timeline-slots' }, slotEls.slice(from, from + 24)))));
+      const timelineWrap = h('div', { class: 'timeline-wrap' }, timeline);
       if (writable()) {
         const brushes = h('div', { class: 'brushes', role: 'group', 'aria-label': t('draw_with') }, [3, 2, 1, 0].map((p) => h('button', {
           class: 'brush', type: 'button', 'aria-pressed': String(brush === p), dataset: { p },
@@ -1199,11 +1243,10 @@
           const i = Number(el.dataset.i);
           const from = lastPainted ?? i;
           lastPainted = i;
-          const cells = timeline.children;
           for (let k = Math.min(from, i); k <= Math.max(from, i); k++) {
             work[day][k] = brush;
-            cells[k].dataset.p = brush;
-            cells[k].classList.toggle('changed', base[day][k] !== brush);
+            slotEls[k].dataset.p = brush;
+            slotEls[k].classList.toggle('changed', base[day][k] !== brush);
           }
         };
         timeline.addEventListener('pointerdown', (event) => {
@@ -1678,236 +1721,418 @@
 
   // ------------------------------------------------------------------ view: module
 
+  /** Features of config.ini by topic, in the order of the file */
+  const FEATURE_GROUPS = [
+    ['fg_schedule', ['chrono_schedule_read', 'chrono_schedule_write']],
+    ['fg_clock', ['clock_read', 'clock_write', 'timezone_read', 'timezone_write']],
+    ['fg_datalog', ['datalog_read', 'datalog_clear']],
+    ['fg_cloud', ['cloud_read', 'pin_read', 'pin_write', 'firmware_update_check']],
+    ['fg_module', ['wifi_scan', 'module_restart']]
+  ];
+  /** Features that change the module, delete data or disturb the stove link */
+  const RISKY_FEATURES = new Set(['clock_write', 'timezone_write', 'datalog_clear', 'pin_write', 'module_restart', 'wifi_scan']);
+
+  /** UTC offset in seconds of an RFC 3339 date (`+02:00`), 0 when absent */
+  function rfcOffset(text) {
+    const m = /([+-])(\d{2}):(\d{2})$/.exec(text || '');
+    return m ? (m[1] === '-' ? -1 : 1) * (Number(m[2]) * 3600 + Number(m[3]) * 60) : 0;
+  }
+
   function mountModule(main) {
     main.append(h('h1', { class: 'section-title', text: t('module_title') }), h('p', { class: 'section-sub', text: t('module_sub') }));
-    const grid = h('div', { class: 'grid grid-2' });
-    main.append(grid);
-    let built = false;
+    const left = h('div', { class: 'stack' }), right = h('div', { class: 'stack' });
+    const featuresHolder = h('div');
+    main.append(h('div', { class: 'stack' }, h('div', { class: 'grid grid-2' }, left, right), featuresHolder));
+
     const kv = (rows) => h('dl', { class: 'kv' }, rows.filter(Boolean).map(([k, v]) => [h('dt', { text: k }), h('dd', null, v ?? '—')]));
     const loadingEl = () => h('div', { class: 'loading' }, h('span', { class: 'spinner' }), t('loading'));
     const errorEl = (message) => h('div', { class: 'note warn' }, icon('alert', { width: 18, height: 18 }), message);
-
-    /** Card whose content comes from an async loader, with a refresh button */
-    function asyncCard(title, iconName, featureName, loader) {
-      const c = card(title, iconName);
-      const content = h('div', { class: 'stack' });
-      c.el.append(content);
-      const reloadCard = async (...args) => {
-        content.textContent = '';
-        content.append(loadingEl());
-        try {
-          const nodes = await loader(reloadCard, ...args);
-          content.textContent = '';
-          appendKids(content, [nodes]);
-        } catch (error) {
-          content.textContent = '';
-          content.append(errorEl(error.message));
-        }
-      };
-      if (featureName && !feature(featureName)) content.append(featureNote(featureName));
-      else {
-        c.head.append(h('button', { class: 'btn btn-sm btn-ghost', type: 'button', title: t('refresh'), 'aria-label': t('refresh'), onclick: () => reloadCard() }, icon('refresh')));
-        reloadCard();
-      }
-      return c.el;
-    }
-
     const get = async (path) => {
       const r = await api('GET', path);
       if (!r.ok) throw new Error(r.error);
       return r.data;
     };
 
+    // Data read from the module: clock and time zone when the page opens (local reads), the rest
+    // only when asked
+    const data = { clock: null, clockAt: 0, clockError: null, tz: null, firmware: null, firmwareError: null, firmwareBusy: false,
+      datalog: null, cloud: null, pin: null, networks: null };
+    let built = false, ticker = null;
+    /** Sections of the Details card: loaded, being read, error */
+    const detailState = {};
+
+    const moduleCard = card(t('module_title'), 'chip');
+    const moduleBody = h('div');
+    moduleCard.el.append(moduleBody);
+    const toolsCard = card(t('tools'), 'wrench');
+    const toolsBody = h('div', { class: 'tools' });
+    toolsCard.el.append(toolsBody);
+    const detailsCard = card(t('details'), 'list');
+    const detailsBody = h('div', { class: 'details' });
+    detailsCard.el.append(h('p', { class: 'muted small', style: { marginBottom: '6px' }, text: t('details_hint') }), detailsBody);
+    // Tools are the tallest card: alone in their column
+    left.append(moduleCard.el, detailsCard.el);
+    right.append(toolsCard.el);
+
+    async function loadClock() {
+      data.clockError = null;
+      try {
+        const [clock, tz] = await Promise.all([
+          feature('clock_read') ? get('api/clock') : null,
+          feature('timezone_read') ? get('api/timezone') : null
+        ]);
+        data.clock = clock; data.clockAt = Date.now(); data.tz = tz;
+        if (clock) (detailState.clocks ||= {}).loaded = true;
+      } catch (error) {
+        data.clockError = error.message;
+      }
+      renderAll();
+    }
+
+    /** Current clock of the module, advanced since it was read */
+    const moduleNow = () => (data.clock?.module_utc ? new Date(data.clock.module_utc * 1000 + Date.now() - data.clockAt) : null);
+    const clockDate = (date, withSeconds) => {
+      if (!date) return '—';
+      try {
+        return date.toLocaleString(lang, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+          second: withSeconds ? '2-digit' : undefined, timeZone: data.tz?.known ? data.tz.zone : undefined });
+      } catch {
+        return fmtDateTime(date, withSeconds);
+      }
+    };
+    const offsetText = (sec) => (Math.abs(sec) < 2 ? t('on_time') : t(sec < 0 ? 'late_by' : 'ahead_by', { d: fmtDuration(Math.abs(sec)) }));
+    /**
+     * Stove clock minus the local time of the bridge, in whole minutes: the stove has no seconds.
+     * The module clock is no reference: it follows the stove clock, snapping back to its minute.
+     */
+    function stoveOffsetMinutes(clock) {
+      if (!clock?.stove_local || !clock.bridge_utc) return null;
+      const bridgeLocal = clock.bridge_utc + rfcOffset(clock.module_time);
+      const diff = Math.floor(clock.stove_local / 60) - Math.floor(bridgeLocal / 60);
+      // The stove minute may not be read again yet just after the minute changed
+      return diff === -1 && bridgeLocal % 60 < 15 ? 0 : diff;
+    }
+    const minutesText = (min) => (min === 0 ? t('on_time_minute') : t(min < 0 ? 'late_by' : 'ahead_by', { d: `${Math.abs(min)} min` }));
+
+    // ---- Wi-Fi module
+
+    const clockValue = h('span', { class: 'num' });
+    function tickClock() { clockValue.textContent = clockDate(moduleNow(), true); }
+
+    function renderModule() {
+      const inf = store.inf || {}, d0 = store.dat0 || {};
+      const sensors = [d0.temp_room1_enabled && t('t_room_n', { n: 1 }), d0.temp_room2_enabled && t('t_room_n', { n: 2 }),
+        d0.temp_room3_enabled && t('t_room_n', { n: 3 }), d0.temp_water_enabled && t('t_water'),
+        d0.boiler_enabled && t('t_boiler'), d0.domestic_hot_water_enabled && t('t_dhw')].filter(Boolean);
+
+      const firmware = h('div', { class: 'row', style: { gap: '6px 10px' } }, h('b', { text: inf.version || '—' }));
+      if (data.firmwareBusy) firmware.append(h('span', { class: 'spinner' }));
+      else if (data.firmware) {
+        firmware.append(data.firmware.update_available
+          ? h('span', { class: 'pill pill-warn', text: t('fw_update', { v: data.firmware.latest_available }) })
+          : h('span', { class: 'pill pill-good', text: t('fw_uptodate') }));
+      } else if (data.firmwareError) firmware.append(h('span', { class: 'muted small', text: data.firmwareError }));
+      if (feature('firmware_update_check') && !data.firmwareBusy) {
+        firmware.append(h('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: checkFirmware, title: t('fw_hint') },
+          icon('refresh'), t(data.firmware ? 'fw_check_again' : 'fw_check')));
+      }
+
+      let clockRow = null, zoneRow = null;
+      if (!feature('clock_read')) clockRow = h('span', { class: 'muted small', text: t('disabled') });
+      else if (data.clockError) clockRow = h('span', { class: 'muted small', text: data.clockError });
+      else if (!data.clock) clockRow = h('span', { class: 'spinner' });
+      else {
+        const stoveOffset = stoveOffsetMinutes(data.clock);
+        clockRow = h('span', { class: 'row', style: { gap: '4px 8px' } }, clockValue,
+          stoveOffset ? h('span', { class: 'pill pill-warn', title: t('stove_clock'), text: t('stove_pill', { state: minutesText(stoveOffset) }) }) : null);
+        tickClock();
+      }
+      if (feature('timezone_read') && data.tz) {
+        zoneRow = h('span', { class: 'row', style: { gap: '4px 8px' } }, h('span', { text: data.tz.zone }),
+          !data.tz.known && h('span', { class: 'pill pill-warn', text: t('tz_unknown') }));
+      }
+
+      moduleBody.textContent = '';
+      moduleBody.append(kv([
+        [t('hostname'), inf.hostname],
+        [t('firmware'), firmware],
+        [t('signal'), inf.signal],
+        [t('stove_address'), h('span', null, h('span', { class: 'mono', text: store.status?.stove_address || '—' }),
+          store.status?.discovery ? h('span', { class: 'muted small', text: ` · ${t('disc_found')}` }) : null)],
+        [t('date_time'), clockRow],
+        zoneRow && [t('timezone'), zoneRow],
+        [t('manufacturer'), d0.index_manufacturer],
+        [t('stove_config'), received(d0) ? `${t('fans_n', { n: d0.fan_number })} · ${sensors.join(', ') || t('none')}` : null]
+      ]));
+    }
+
+    async function checkFirmware() {
+      data.firmwareBusy = true; data.firmwareError = null;
+      renderModule();
+      try {
+        data.firmware = await get('api/firmware?refresh=true');
+      } catch (error) {
+        data.firmwareError = error.message;
+      }
+      data.firmwareBusy = false;
+      renderModule();
+    }
+
+    // ---- Details: clocks, data logger, cloud (read when asked)
+
+    function detailSection(key, iconName, featureName, loader, content) {
+      const state = detailState[key] ||= { loaded: false, busy: false, error: null };
+      const run = async () => {
+        state.busy = true; state.error = null;
+        renderDetails();
+        try {
+          await loader();
+          if (key === 'clocks' && data.clockError) throw new Error(data.clockError);
+          state.loaded = true;
+        } catch (error) { state.error = error.message; }
+        state.busy = false;
+        renderDetails();
+      };
+      const enabled = feature(featureName);
+      const head = h('div', { class: 'detail-head' }, h('h3', null, icon(iconName), t(key)));
+      if (enabled) {
+        head.append(state.loaded
+          ? h('button', { class: 'btn btn-sm btn-ghost', type: 'button', title: t('refresh'), 'aria-label': t('refresh'), disabled: state.busy, onclick: run }, icon('refresh'))
+          : h('button', { class: 'btn btn-sm', type: 'button', disabled: state.busy, onclick: run }, icon('download'), t('read')));
+      }
+      const body = h('div', { class: 'detail-body' });
+      if (!enabled) body.append(featureNote(featureName));
+      else if (state.busy) body.append(loadingEl());
+      else if (state.error) body.append(errorEl(state.error));
+      else if (state.loaded) appendKids(body, [content()]);
+      else body.append(h('p', { class: 'muted small', text: t('not_read') }));
+      return h('section', { class: 'detail' }, head, body);
+    }
+
+    function clockDetails() {
+      const clock = data.clock;
+      const stoveOffset = stoveOffsetMinutes(clock);
+      const stoveDate = parseDate(clock.stove_time);
+      return [kv([
+        [t('module_clock'), clockDate(clock.module_utc ? new Date(clock.module_utc * 1000) : null, true)],
+        [t('bridge_clock'), clockDate(new Date(clock.bridge_utc * 1000), true)],
+        [t('offset_module'), clock.module_offset_s === null ? '—' : offsetText(clock.module_offset_s)],
+        [t('stove_clock'), stoveDate ? stoveDate.toLocaleString(lang, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—'],
+        [t('offset_stove'), stoveOffset === null ? '—' : minutesText(stoveOffset)]
+      ]), h('p', { class: 'muted small', text: t('clock_hint', { time: fmtDateTime(new Date(data.clockAt), true) }) })];
+    }
+
+    function datalogDetails() {
+      const bounds = data.datalog;
+      const count = bounds.last_utc && bounds.first_utc ? Math.round((bounds.last_utc - bounds.first_utc) / 900) + 1 : 0;
+      return [kv([
+        [t('first_record'), fmtDateTime(parseDate(bounds.first_time))],
+        [t('last_record'), fmtDateTime(parseDate(bounds.last_time))],
+        [t('records_title'), t('record_count', { n: fmtNum(count) })]
+      ]), h('a', { href: '#/history', class: 'small', text: t('history_title') + ' →' })];
+    }
+
+    function cloudDetails() {
+      const cloud = data.cloud;
+      const rows = [
+        [t('relay'), h('span', { class: 'mono', text: `${cloud.relay_balancer.host}:${cloud.relay_balancer.port}` })],
+        [t('cloud_server'), h('span', { class: 'mono', text: `${cloud.cloud_server.url}:${cloud.cloud_server.port}${cloud.cloud_server.path}` })],
+        [t('last_upload'), cloud.cloud_last_upload_time ? fmtDateTime(parseDate(cloud.cloud_last_upload_time)) : t('never')]
+      ];
+      if (feature('pin_read')) {
+        const button = h('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: async () => {
+          if (data.pin !== null) { data.pin = null; renderDetails(); return; }
+          button.disabled = true;
+          try { data.pin = (await get('api/pin')).pin; } catch (error) { showToast(error.message, 'error'); }
+          renderDetails();
+        } }, icon('eye'), t(data.pin !== null ? 'hide' : 'show'));
+        rows.push([t('pin'), h('span', { class: 'row', style: { gap: '4px 8px' } }, h('span', { class: 'mono', text: data.pin ?? '••••••' }), button)]);
+      }
+      return kv(rows);
+    }
+
+    function renderDetails() {
+      detailsBody.textContent = '';
+      detailsBody.append(
+        detailSection('clocks', 'clock', 'clock_read', loadClock, clockDetails),
+        detailSection('datalog', 'database', 'datalog_read', async () => { data.datalog = await get('api/datalog/info'); }, datalogDetails),
+        detailSection('cloud', 'cloud', 'cloud_read', async () => { data.cloud = await get('api/cloud'); }, cloudDetails));
+    }
+
+    // ---- Tools
+
+    function toolRow({ title, desc, featureName, danger, control, extra }) {
+      const enabled = feature(featureName);
+      return h('div', { class: 'tool' + (enabled ? '' : ' off') },
+        h('div', { class: 'tool-text' },
+          h('b', { text: title }),
+          h('small', { text: desc }),
+          !enabled && h('small', { class: 'tool-off' }, t('tool_off'), ' ',
+            h('a', { href: '#features', onclick: (event) => { event.preventDefault(); featuresHolder.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, text: featureName }))),
+        h('div', { class: 'tool-ctl' + (danger ? ' danger' : '') }, control(enabled)),
+        extra);
+    }
+
+    function renderTools() {
+      toolsBody.textContent = '';
+      const stoveOffset = stoveOffsetMinutes(data.clock);
+      toolsBody.append(toolRow({
+        title: t('sync_clock'),
+        desc: stoveOffset !== null ? `${t('sync_clock_desc')} ${t('stove_is', { state: minutesText(stoveOffset) })}` : t('sync_clock_desc'),
+        featureName: 'clock_write',
+        control: (enabled) => h('button', { class: 'btn btn-sm', type: 'button', disabled: !enabled, onclick: async (event) => {
+          if (!(await confirmDialog({ title: t('sync_clock'), text: t('sync_clock_text') }))) return;
+          event.target.closest('button').disabled = true;
+          if ((await command('api/clock', {}, t('sync_clock'))).status === 'ok') {
+            // The module sets the stove clock right after its own
+            await sleep(2500);
+            await loadClock();
+            if (data.clock) showToast(t('sync_result', { state: minutesText(stoveOffsetMinutes(data.clock)) }), 'ok', 6000);
+          }
+          renderTools();
+        } }, icon('clock'), t('sync'))
+      }));
+
+      toolsBody.append(toolRow({
+        title: t('timezone'),
+        desc: data.tz ? t('tz_desc', { zone: data.tz.zone }) : t('tz_desc_unknown'),
+        featureName: 'timezone_write',
+        control: (enabled) => {
+          const zones = Array.isArray(data.tz?.available) ? data.tz.available : [];
+          const select = h('select', { 'aria-label': t('timezone'), class: 'tz-select', disabled: !enabled || !zones.length },
+            zones.map((z) => h('option', { value: z, text: z, selected: z === data.tz.zone })));
+          return [select, h('button', { class: 'btn btn-sm', type: 'button', disabled: !enabled || !zones.length, text: t('apply'), onclick: async () => {
+            const zone = select.value;
+            if (zone === data.tz.zone || !(await confirmDialog({ title: t('timezone'), text: t('tz_apply_text', { zone }) }))) return;
+            if ((await command('api/timezone', { zone }, `${t('timezone')} ${zone}`)).status === 'ok') { await sleep(1500); await loadClock(); }
+          } })];
+        }
+      }));
+
+      const scanResults = h('div', { class: 'tool-extra' });
+      if (data.networks) {
+        scanResults.append(h('div', { class: 'table-wrap' }, h('table', null,
+          h('thead', null, h('tr', null, [t('ssid'), t('rssi'), t('security')].map((x) => h('th', { text: x })))),
+          h('tbody', null, data.networks.map((n) => h('tr', { title: n.bssid },
+            h('td', { class: 'wrap', text: n.ssid || t('hidden_ssid') }),
+            h('td', { class: 'nowrap' }, signalBars(n.rssi >= -55 ? 4 : n.rssi >= -67 ? 3 : n.rssi >= -78 ? 2 : 1), `${n.rssi} dBm`),
+            h('td', { text: n.security })))))));
+      }
+      toolsBody.append(toolRow({
+        title: t('wifi_scan_title'),
+        desc: t('wifi_scan_warn'),
+        featureName: 'wifi_scan',
+        control: (enabled) => h('button', { class: 'btn btn-sm', type: 'button', disabled: !enabled, onclick: async (event) => {
+          if (!(await confirmDialog({ title: t('wifi_scan_title'), text: t('wifi_scan_text') }))) return;
+          const button = event.target.closest('button');
+          button.disabled = true;
+          scanResults.textContent = '';
+          scanResults.append(loadingEl());
+          try { data.networks = await get('api/wifi/scan'); } catch (error) { data.networks = null; showToast(error.message, 'error'); }
+          renderTools();
+        } }, icon('wifi'), t('wifi_scan')),
+        extra: scanResults
+      }));
+
+      if (feature('pin_write')) {
+        const input = h('input', { type: 'text', placeholder: t('new_pin'), maxlength: 10, autocomplete: 'off', class: 'pin-input' });
+        toolsBody.append(toolRow({
+          title: t('change_pin_title'), desc: t('pin_text'), featureName: 'pin_write',
+          control: () => [input, h('button', { class: 'btn btn-sm', type: 'button', text: t('change_pin'), onclick: async () => {
+            const pin = input.value.trim();
+            if (!/^[A-Za-z0-9]{5,10}$/.test(pin)) { showToast(t('new_pin'), 'error'); return; }
+            if (!(await confirmDialog({ title: t('change_pin_title'), text: t('pin_text') }))) return;
+            if ((await command('api/pin', { pin }, t('pin'))).status === 'ok') { input.value = ''; data.pin = null; }
+          } })]
+        }));
+      } else {
+        toolsBody.append(toolRow({ title: t('change_pin_title'), desc: t('pin_text'), featureName: 'pin_write',
+          control: () => h('button', { class: 'btn btn-sm', type: 'button', disabled: true, text: t('change_pin') }) }));
+      }
+
+      toolsBody.append(toolRow({
+        title: t('datalog_clear'), desc: t('datalog_clear_text'), featureName: 'datalog_clear', danger: true,
+        control: (enabled) => h('button', { class: 'btn btn-sm btn-danger', type: 'button', disabled: !enabled, onclick: async () => {
+          if (!(await confirmDialog({ title: t('datalog_clear'), text: t('datalog_clear_text'), ok: t('datalog_clear'), danger: true }))) return;
+          if ((await command('api/datalog/clear', {}, t('datalog_clear'))).status === 'ok') { clearDatalogCache(); data.datalog = null; delete detailState.datalog; renderDetails(); }
+        } }, icon('trash'), t('clear'))
+      }));
+
+      toolsBody.append(toolRow({
+        title: t('restart_module'), desc: t('restart_text'), featureName: 'module_restart', danger: true,
+        control: (enabled) => h('button', { class: 'btn btn-sm btn-danger', type: 'button', disabled: !enabled, onclick: async () => {
+          if (!(await confirmDialog({ title: t('restart_module'), text: t('restart_text'), ok: t('restart_module'), danger: true }))) return;
+          command('api/module/restart', {}, t('restart_label'));
+        } }, icon('power'), t('restart'))
+      }));
+    }
+
+    // ---- Features
+
+    const featureBusy = new Set();
+
+    async function setFeature(name, value) {
+      featureBusy.add(name);
+      renderFeatures();
+      const r = await api('POST', 'api/features', { [name]: value });
+      logActivity({ method: 'POST', path: 'api/features', body: { [name]: value }, status: r.status, ms: r.ms, source: 'ui' });
+      featureBusy.delete(name);
+      if (r.ok) {
+        store.features = r.data.features;
+        showToast(t(r.data.saved_to ? 'feature_saved' : 'feature_memory', { name, state: t(value ? 'enabled' : 'disabled'), file: r.data.saved_to }), 'ok');
+        const needsClock = (name === 'clock_read' || name === 'timezone_read') && value;
+        renderAll();
+        if (needsClock) loadClock();
+      } else {
+        showToast(t('write_failed', { label: name, error: r.error }), 'error');
+        renderFeatures();
+      }
+    }
+
+    function renderFeatures() {
+      const editable = Boolean(store.config?.edit_features);
+      const c = card(t('features'), 'list');
+      c.el.id = 'features';
+      if (store.config?.file) c.head.append(h('span', { class: 'muted small mono', text: store.config.file }));
+      c.el.append(h('p', { class: 'muted small', style: { marginBottom: '12px' }, text: t(editable ? 'features_edit_hint' : 'features_locked') }));
+      c.el.append(h('div', { class: 'feature-groups' }, FEATURE_GROUPS.map(([groupKey, names]) =>
+        h('div', { class: 'feature-group' }, h('h3', { text: t(groupKey) }), names.map((name) => {
+          const control = switchControl({ label: t('f_' + name), desc: name, onToggle: (v) => setFeature(name, v) });
+          control.el.classList.add('feature-switch');
+          if (RISKY_FEATURES.has(name)) control.el.classList.add('risky');
+          control.set(feature(name), featureBusy.has(name), !editable || featureBusy.has(name));
+          control.el.title = t('fd_' + name);
+          return control.el;
+        })))));
+      featuresHolder.textContent = '';
+      featuresHolder.append(c.el);
+    }
+
+    function renderAll() {
+      renderModule();
+      renderDetails();
+      renderTools();
+      renderFeatures();
+    }
+
     function signalBars(level) {
       return h('span', { class: 'signal', 'aria-hidden': 'true' }, [1, 2, 3, 4].map((i) => h('i', { class: i <= level ? 'on' : '', style: { height: `${i * 3 + 2}px` } })));
     }
 
-    function build() {
-      built = true;
-      const inf = store.inf || {}, d0 = store.dat0 || {};
-
-      // Module & firmware
-      const moduleCard = card(t('module_title'), 'chip');
-      const fwLine = h('span', { class: 'row' });
-      const fwCheck = async (refreshNow) => {
-        if (!feature('firmware_update_check')) return;
-        fwLine.textContent = '';
-        fwLine.append(h('span', { class: 'spinner' }));
-        try {
-          const fw = await get('api/firmware' + (refreshNow ? '?refresh=true' : ''));
-          fwLine.textContent = '';
-          fwLine.append(fw.update_available
-            ? h('span', { class: 'pill pill-warn', text: t('fw_update', { v: fw.latest_available }) })
-            : h('span', { class: 'pill pill-good', text: t('fw_uptodate') }),
-          h('span', { class: 'muted small', text: t('fw_checked', { age: fmtAgo(fw.checked_at) }) }));
-        } catch (error) {
-          fwLine.textContent = '';
-          fwLine.append(h('span', { class: 'muted small', text: error.message }));
+    return {
+      update() {
+        if (!built && store.features && received(store.dat0)) {
+          built = true;
+          renderAll();
+          if (feature('clock_read') || feature('timezone_read')) loadClock();
+          ticker = setInterval(() => { if (data.clock) tickClock(); }, 1000);
+        } else if (built && !data.firmwareBusy) {
+          // Host name, signal and stove setup follow the polling
+          renderModule();
         }
-      };
-      const sensors = [d0.temp_room1_enabled && t('t_room_n', { n: 1 }), d0.temp_room2_enabled && t('t_room_n', { n: 2 }),
-        d0.temp_room3_enabled && t('t_room_n', { n: 3 }), d0.temp_water_enabled && t('t_water'),
-        d0.boiler_enabled && t('t_boiler'), d0.domestic_hot_water_enabled && t('t_dhw')].filter(Boolean);
-      moduleCard.el.append(kv([
-        [t('hostname'), inf.hostname], [t('firmware'), h('span', { class: 'row' }, h('b', { text: inf.version || '—' }), fwLine)],
-        [t('signal'), inf.signal], [t('stove_address'), h('span', null, h('span', { class: 'mono', text: store.status?.stove_address || '—' }),
-          store.status?.discovery ? h('span', { class: 'muted small', text: ` · ${t('disc_found')}` }) : null)],
-        [t('manufacturer'), d0.index_manufacturer], [t('stove_config'), received(d0) ? `${t('fans_n', { n: d0.fan_number })} · ${sensors.join(', ') || t('none')}` : null]
-      ]));
-      if (feature('firmware_update_check')) {
-        moduleCard.el.append(h('div', { class: 'spread', style: { marginTop: '14px' } }, h('span', { class: 'muted small', text: t('fw_hint') }),
-          h('button', { class: 'btn btn-sm', type: 'button', onclick: () => fwCheck(true) }, icon('refresh'), t('fw_check'))));
-        fwCheck(false);
-      }
-      grid.append(moduleCard.el);
-
-      // Clocks & time zone
-      grid.append(asyncCard(t('clocks'), 'clock', 'clock_read', async (reloadCard) => {
-        const [clock, tz] = await Promise.all([get('api/clock'), feature('timezone_read') ? get('api/timezone') : null]);
-        const stoveDate = parseDate(clock.stove_time);
-        const stoveOffset = stoveDate ? Math.round((stoveDate.getTime() - Date.now()) / 1000) : null;
-        const offsetText = (sec) => (sec === null || sec === undefined ? '—' : `${sec > 0 ? '+' : ''}${fmtNum(sec)} s`);
-        const offsetPill = (sec) => h('span', { class: `pill ${sec !== null && Math.abs(sec) > 120 ? 'pill-warn' : 'pill-muted'}`, text: offsetText(sec) });
-        const nodes = [kv([
-          [t('module_clock'), fmtDateTime(parseDate(clock.module_time), true)],
-          [t('stove_clock'), fmtDateTime(stoveDate, true)],
-          [t('bridge_clock'), fmtDateTime(new Date(clock.bridge_utc * 1000), true)],
-          [t('offset_module'), offsetPill(clock.module_offset_s)],
-          [t('offset_stove'), offsetPill(stoveOffset)],
-          tz && [t('timezone'), h('span', { class: 'row' }, h('b', { text: tz.zone }), !tz.known && h('span', { class: 'pill pill-warn', text: t('tz_unknown') }))]
-        ])];
-        nodes.push(h('p', { class: 'muted small', text: t('offset_hint') }));
-        const actions = h('div', { class: 'row' });
-        if (tz && feature('timezone_write') && Array.isArray(tz.available)) {
-          const select = h('select', { 'aria-label': t('timezone') }, tz.available.map((z) => h('option', { value: z, text: z, selected: z === tz.zone })));
-          actions.append(select, h('button', { class: 'btn btn-sm', type: 'button', text: t('apply'), onclick: async () => {
-            const zone = select.value;
-            if (!(await confirmDialog({ title: t('timezone'), text: t('tz_apply_text', { zone }) }))) return;
-            if ((await command('api/timezone', { zone }, `${t('timezone')} ${zone}`)).status === 'ok') setTimeout(reloadCard, 1500);
-          } }));
-        }
-        if (feature('clock_write')) {
-          actions.append(h('button', { class: 'btn btn-sm', type: 'button', onclick: async () => {
-            if (!(await confirmDialog({ title: t('sync_clock'), text: t('sync_clock_text') }))) return;
-            if ((await command('api/clock', {}, t('sync_clock'))).status === 'ok') setTimeout(reloadCard, 1500);
-          } }, icon('clock'), t('sync_clock')));
-        }
-        if (actions.childElementCount) nodes.push(actions);
-        return nodes;
-      }));
-
-      // Data logger
-      grid.append(asyncCard(t('datalog'), 'database', 'datalog_read', async (reloadCard) => {
-        const bounds = await get('api/datalog/info');
-        const count = bounds.last_utc && bounds.first_utc ? Math.round((bounds.last_utc - bounds.first_utc) / 900) + 1 : 0;
-        const nodes = [kv([
-          [t('first_record'), fmtDateTime(parseDate(bounds.first_time))],
-          [t('last_record'), fmtDateTime(parseDate(bounds.last_time))],
-          ['', h('span', { class: 'muted', text: t('record_count', { n: fmtNum(count) }) })]
-        ]), h('a', { href: '#/history', class: 'small', text: t('history_title') + ' →' })];
-        if (feature('datalog_clear')) {
-          nodes.push(h('div', null, h('button', { class: 'btn btn-sm btn-danger', type: 'button', onclick: async () => {
-            if (!(await confirmDialog({ title: t('datalog_clear'), text: t('datalog_clear_text'), ok: t('datalog_clear'), danger: true }))) return;
-            if ((await command('api/datalog/clear', {}, t('datalog_clear'))).status === 'ok') { clearDatalogCache(); setTimeout(reloadCard, 1500); }
-          } }, t('datalog_clear'))));
-        }
-        return nodes;
-      }));
-
-      // Cloud & PIN
-      grid.append(asyncCard(t('cloud'), 'cloud', 'cloud_read', async () => {
-        const cloud = await get('api/cloud');
-        const rows = [
-          [t('relay'), h('span', { class: 'mono', text: `${cloud.relay_balancer.host}:${cloud.relay_balancer.port}` })],
-          [t('cloud_server'), h('span', { class: 'mono', text: `${cloud.cloud_server.url}:${cloud.cloud_server.port}${cloud.cloud_server.path}` })],
-          [t('last_upload'), cloud.cloud_last_upload_time ? fmtDateTime(parseDate(cloud.cloud_last_upload_time)) : t('never')]
-        ];
-        const nodes = [kv(rows)];
-        if (feature('pin_read') || feature('pin_write')) {
-          const pinValue = h('span', { class: 'mono', text: '••••••' });
-          const pinRow = h('div', { class: 'row' }, h('span', { class: 'muted', text: t('pin') }), pinValue);
-          if (feature('pin_read')) {
-            const showButton = h('button', { class: 'btn btn-sm btn-ghost', type: 'button' }, icon('eye'), t('show'));
-            let shown = false;
-            showButton.onclick = async () => {
-              if (shown) { pinValue.textContent = '••••••'; shown = false; showButton.lastChild.textContent = t('show'); return; }
-              showButton.disabled = true;
-              try {
-                pinValue.textContent = (await get('api/pin')).pin;
-                shown = true;
-                showButton.lastChild.textContent = t('hide');
-              } catch (error) { showToast(error.message, 'error'); }
-              showButton.disabled = false;
-            };
-            pinRow.append(showButton);
-          }
-          nodes.push(h('div', { class: 'divider' }), pinRow);
-          if (feature('pin_write')) {
-            const input = h('input', { type: 'text', placeholder: t('new_pin'), maxlength: 10, autocomplete: 'off', pattern: '[A-Za-z0-9]{5,10}' });
-            nodes.push(h('div', { class: 'row' }, input, h('button', { class: 'btn btn-sm', type: 'button', text: t('change_pin'), onclick: async () => {
-              const pin = input.value.trim();
-              if (!/^[A-Za-z0-9]{5,10}$/.test(pin)) { showToast(t('new_pin'), 'error'); return; }
-              if (!(await confirmDialog({ title: t('pin'), text: t('pin_text') }))) return;
-              if ((await command('api/pin', { pin }, t('pin'))).status === 'ok') input.value = '';
-            } })));
-          }
-        }
-        return nodes;
-      }));
-
-      // Wi-Fi scan
-      const wifiCard = card(t('wifi_networks'), 'wifi');
-      const wifiBody = h('div', { class: 'stack' });
-      wifiCard.el.append(wifiBody);
-      if (!feature('wifi_scan')) wifiBody.append(featureNote('wifi_scan'));
-      else {
-        const scanButton = h('button', { class: 'btn btn-sm', type: 'button', onclick: scan }, icon('wifi'), t('wifi_scan'));
-        wifiCard.head.append(scanButton);
-        wifiBody.append(h('div', { class: 'note', text: t('wifi_scan_warn') }));
-        async function scan() {
-          if (!(await confirmDialog({ title: t('wifi_scan'), text: t('wifi_scan_text') }))) return;
-          scanButton.disabled = true;
-          wifiBody.textContent = '';
-          wifiBody.append(loadingEl());
-          try {
-            const networks = await get('api/wifi/scan');
-            wifiBody.textContent = '';
-            wifiBody.append(h('div', { class: 'table-wrap' }, h('table', null,
-              h('thead', null, h('tr', null, [t('ssid'), t('rssi'), t('security'), t('bssid')].map((x) => h('th', { text: x })))),
-              h('tbody', null, networks.map((n) => h('tr', null,
-                h('td', { class: 'wrap', text: n.ssid || t('hidden_ssid') }),
-                h('td', null, signalBars(n.rssi >= -55 ? 4 : n.rssi >= -67 ? 3 : n.rssi >= -78 ? 2 : 1), `${n.rssi} dBm`),
-                h('td', { text: n.security }), h('td', { class: 'mono', text: n.bssid })))))));
-          } catch (error) {
-            wifiBody.textContent = '';
-            wifiBody.append(errorEl(error.message));
-          }
-          scanButton.disabled = false;
-        }
-      }
-      grid.append(wifiCard.el);
-
-      // Maintenance & features
-      const maintenance = card(t('maintenance'), 'wrench');
-      if (feature('module_restart')) {
-        maintenance.el.append(h('div', { class: 'spread' }, h('span', { class: 'muted small', text: t('restart_text') }),
-          h('button', { class: 'btn btn-danger', type: 'button', onclick: async () => {
-            if (!(await confirmDialog({ title: t('restart_module'), text: t('restart_text'), ok: t('restart_module'), danger: true }))) return;
-            command('api/module/restart', {}, t('restart_label'));
-          } }, icon('power'), t('restart_module'))));
-      } else {
-        maintenance.el.append(featureNote('module_restart'));
-      }
-      grid.append(maintenance.el);
-      const featuresCard = card(t('features'), 'list',
-        h('p', { class: 'muted small', style: { marginBottom: '10px' }, text: t('features_hint') }),
-        h('div', { class: 'feature-list' }, Object.entries(store.features || {}).map(([name, on]) =>
-          h('div', { class: 'feature' }, h('code', { text: name }), h('span', { class: `pill ${on ? 'pill-good' : 'pill-muted'}`, text: t(on ? 'enabled' : 'disabled') })))));
-      featuresCard.el.classList.add('span-all');
-      grid.append(featuresCard.el);
-    }
-
-    return { update() { if (!built && store.features && received(store.dat0)) build(); } };
+      },
+      destroy() { clearInterval(ticker); }
+    };
   }
 
   // ------------------------------------------------------------------ view: diagnostics
@@ -1955,7 +2180,7 @@
 
     const rawCard = card(t('raw_data'), 'terminal');
     const rawPages = [['api/status', () => store.status], ['api/inf', () => store.inf], ['api/dat/0', () => store.dat0],
-      ['api/dat/1', () => store.dat1], ['api/dat/2', () => store.dat2], ['api/features', () => store.features]];
+      ['api/dat/1', () => store.dat1], ['api/dat/2', () => store.dat2], ['api/features', () => store.features], ['api/config', () => store.config]];
     const rawBlocks = rawPages.map(([path, read]) => {
       const holder = h('div', { style: { padding: '0 8px 8px' } });
       const copyButton = h('button', { class: 'btn btn-sm btn-ghost', type: 'button', text: t('copy'),

@@ -1,4 +1,5 @@
-use crate::hottoh::config::{FeaturesConfig, HttpApiConfig, WebUiConfig};
+use crate::hottoh::config::{HttpApiConfig, WebUiConfig};
+use crate::hottoh::features::FeatureSettings;
 use crate::hottoh::hottoh_const::{ChronoMode, StoveCommands};
 use crate::hottoh::hottoh_structs::{DAT0Data, DAT1Data};
 use crate::hottoh::http_module;
@@ -34,6 +35,12 @@ pub enum ApiError {
     QueueFull(usize),
     #[error("Feature '{0}' is disabled: set {0} = true in the [features] section of config.ini")]
     FeatureDisabled(&'static str),
+    #[error(
+        "Changing the features is disabled: set edit_features = true in the [http_api] section of config.ini"
+    )]
+    EditDisabled,
+    #[error("{0}")]
+    Internal(String),
     #[error("Stove refused the request: {message}")]
     Stove { code: Option<i32>, message: String },
     #[error("Invalid answer from the stove: {0}")]
@@ -55,7 +62,13 @@ impl ResponseError for ApiError {
                 warn!("{}", self);
                 HttpResponse::ServiceUnavailable().json(body)
             }
-            ApiError::FeatureDisabled(_) => HttpResponse::Forbidden().json(body),
+            ApiError::FeatureDisabled(_) | ApiError::EditDisabled => {
+                HttpResponse::Forbidden().json(body)
+            }
+            ApiError::Internal(_) => {
+                warn!("{}", self);
+                HttpResponse::InternalServerError().json(body)
+            }
             ApiError::Stove { code, .. } => HttpResponse::BadGateway().json(json!({
                 "success": false,
                 "error": self.to_string(),
@@ -529,7 +542,7 @@ pub(crate) fn configure(cfg: &mut web::ServiceConfig) {
 fn api_server(
     address: &str,
     data: web::Data<Bridge>,
-    features: web::Data<FeaturesConfig>,
+    features: web::Data<FeatureSettings>,
     with_ui: bool,
 ) -> std::io::Result<Server> {
     Ok(HttpServer::new(move || {
@@ -559,7 +572,7 @@ fn api_server(
 pub async fn start_http_server(
     config: &HttpApiConfig,
     web_ui: &WebUiConfig,
-    features: FeaturesConfig,
+    features: FeatureSettings,
     bridge: Arc<Bridge>,
     desktop: bool,
 ) -> std::io::Result<()> {

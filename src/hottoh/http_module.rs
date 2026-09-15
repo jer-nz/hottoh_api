@@ -6,6 +6,7 @@
 //! asynchronous like the DAT settings (`request_id`, then `GET /api/request/{id}`).
 
 use crate::hottoh::config::FeaturesConfig;
+use crate::hottoh::features::{FeatureChangeError, FeatureSettings};
 use crate::hottoh::firmware_update::{UPDATE_HOST, firmware_exists, firmware_url, latest_firmware};
 use crate::hottoh::hottoh_const::{Command, CommandType, TIME_ZONES, error_message};
 use crate::hottoh::http_api::{ApiError, queued_response};
@@ -20,12 +21,13 @@ use actix_web::{HttpResponse, web};
 use log::info;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use utoipa::{IntoParams, OpenApi, ToSchema};
 
 type Shared = web::Data<Bridge>;
-type Features = web::Data<FeaturesConfig>;
+type Features = web::Data<FeatureSettings>;
 
 /// Longest wait for the answer to a read made on demand (queue, retries included)
 const READ_WAIT: Duration = Duration::from_secs(30);
@@ -45,6 +47,8 @@ const MIN_UTC: u32 = 1_577_836_800;
 #[openapi(
     paths(
         get_features,
+        post_features,
+        get_config,
         get_schedule,
         post_schedule,
         get_clock,
@@ -200,7 +204,46 @@ fn bad_answer(error: impl std::fmt::Display) -> ApiError {
 /// Enabled and disabled features
 #[utoipa::path(get, path = "/api/features", responses((status = 200, body = FeaturesConfig)), tag = "module")]
 pub async fn get_features(features: Features) -> HttpResponse {
-    HttpResponse::Ok().json(features.get_ref())
+    HttpResponse::Ok().json(features.get())
+}
+
+/// Enables or disables features while running, and saves them to the `[features]` section of
+/// the configuration file (other lines and comments kept). Body: the features to change, e.g.
+/// `{"clock_write": true}`. Allowed by `[http_api] edit_features`.
+#[utoipa::path(post, path = "/api/features", request_body = BTreeMap<String, bool>,
+    responses((status = 200), (status = 400), (status = 403), (status = 500)), tag = "module")]
+pub async fn post_features(
+    body: web::Json<BTreeMap<String, bool>>,
+    features: Features,
+) -> Result<HttpResponse, ApiError> {
+    let settings = features.clone();
+    // Writes the configuration file: off the async workers
+    let updated = web::block(move || settings.update(&body))
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .map_err(|e| match e {
+            FeatureChangeError::Locked => ApiError::EditDisabled,
+            FeatureChangeError::Unknown(name) => {
+                ApiError::InvalidParameter(format!("unknown feature '{}'", name))
+            }
+            FeatureChangeError::Save(error) => {
+                ApiError::Internal(format!("cannot save the configuration: {}", error))
+            }
+        })?;
+    Ok(HttpResponse::Ok().json(json!({
+        "success": true,
+        "features": updated,
+        "saved_to": features.file().map(|f| f.display().to_string()),
+    })))
+}
+
+/// Configuration file in use and what the API may change in it
+#[utoipa::path(get, path = "/api/config", responses((status = 200)), tag = "module")]
+pub async fn get_config(features: Features) -> HttpResponse {
+    HttpResponse::Ok().json(json!({
+        "file": features.file().map(|f| f.display().to_string()),
+        "edit_features": features.editable(),
+    }))
 }
 
 /// Current weekly schedule, read twice (see `SCHEDULE_REFRESH_DELAY`)
@@ -228,7 +271,7 @@ struct DayScheduleOutput {
     responses((status = 200), (status = 403), (status = 502), (status = 503), (status = 504)),
     tag = "module")]
 pub async fn get_schedule(bridge: Shared, features: Features) -> Result<HttpResponse, ApiError> {
-    require(features.chrono_schedule_read, "chrono_schedule_read")?;
+    require(features.get().chrono_schedule_read, "chrono_schedule_read")?;
     let schedule = read_schedule(&bridge).await?;
     let days: Vec<DayScheduleOutput> = DAYS
         .iter()
@@ -316,7 +359,10 @@ pub async fn post_schedule(
     bridge: Shared,
     features: Features,
 ) -> Result<HttpResponse, ApiError> {
-    require(features.chrono_schedule_write, "chrono_schedule_write")?;
+    require(
+        features.get().chrono_schedule_write,
+        "chrono_schedule_write",
+    )?;
     let parsed = parse_days(&body.days)?;
     let mut schedule = if parsed.iter().all(Option::is_some) {
         WeeklySchedule::default()
@@ -346,7 +392,7 @@ pub async fn post_schedule(
     responses((status = 200, body = ClockInfo), (status = 403), (status = 502), (status = 503), (status = 504)),
     tag = "module")]
 pub async fn get_clock(bridge: Shared, features: Features) -> Result<HttpResponse, ApiError> {
-    require(features.clock_read, "clock_read")?;
+    require(features.get().clock_read, "clock_read")?;
     let answer = answer_ok(read(&bridge, Command::Clk, vec![], "ClockRead").await?)?;
     let clock = ClockInfo::from_params(&answer).map_err(bad_answer)?;
     let bridge_utc = now_utc();
@@ -375,7 +421,7 @@ pub async fn post_clock(
     bridge: Shared,
     features: Features,
 ) -> Result<HttpResponse, ApiError> {
-    require(features.clock_write, "clock_write")?;
+    require(features.get().clock_write, "clock_write")?;
     let utc = body.utc.unwrap_or_else(now_utc);
     if utc < MIN_UTC {
         return Err(ApiError::InvalidParameter(format!(
@@ -400,7 +446,7 @@ pub async fn post_clock(
     responses((status = 200), (status = 403), (status = 502), (status = 503), (status = 504)),
     tag = "module")]
 pub async fn get_timezone(bridge: Shared, features: Features) -> Result<HttpResponse, ApiError> {
-    require(features.timezone_read, "timezone_read")?;
+    require(features.get().timezone_read, "timezone_read")?;
     let status = read(&bridge, Command::Tmz, vec![], "TimeZoneRead").await?;
     let code = match status.status {
         RequestState::Ok => None,
@@ -432,7 +478,7 @@ pub async fn post_timezone(
     bridge: Shared,
     features: Features,
 ) -> Result<HttpResponse, ApiError> {
-    require(features.timezone_write, "timezone_write")?;
+    require(features.get().timezone_write, "timezone_write")?;
     if !TIME_ZONES.contains(&body.zone.as_str()) {
         return Err(ApiError::InvalidParameter(format!(
             "unknown time zone '{}': expected one of {}",
@@ -459,7 +505,7 @@ pub async fn get_datalog_info(
     bridge: Shared,
     features: Features,
 ) -> Result<HttpResponse, ApiError> {
-    require(features.datalog_read, "datalog_read")?;
+    require(features.get().datalog_read, "datalog_read")?;
     let answer = answer_ok(read(&bridge, Command::Me0, vec![], "DatalogInfo").await?)?;
     let bounds = DatalogBounds::from_params(&answer).map_err(bad_answer)?;
     Ok(HttpResponse::Ok().json(bounds))
@@ -484,7 +530,7 @@ pub async fn get_datalog(
     bridge: Shared,
     features: Features,
 ) -> Result<HttpResponse, ApiError> {
-    require(features.datalog_read, "datalog_read")?;
+    require(features.get().datalog_read, "datalog_read")?;
     let from = query.from.unwrap_or_else(|| now_utc().saturating_sub(3600));
     let count = query.count.unwrap_or(DATALOG_DEFAULT_COUNT);
     if !(1..=DATALOG_MAX_COUNT).contains(&count) {
@@ -531,7 +577,7 @@ pub async fn post_datalog_clear(
     bridge: Shared,
     features: Features,
 ) -> Result<HttpResponse, ApiError> {
-    require(features.datalog_clear, "datalog_clear")?;
+    require(features.get().datalog_clear, "datalog_clear")?;
     queue_command(
         &bridge,
         Command::Mec,
@@ -549,7 +595,7 @@ pub async fn post_datalog_clear(
     responses((status = 200), (status = 403), (status = 502), (status = 503), (status = 504)),
     tag = "module")]
 pub async fn get_pin(bridge: Shared, features: Features) -> Result<HttpResponse, ApiError> {
-    require(features.pin_read, "pin_read")?;
+    require(features.get().pin_read, "pin_read")?;
     let answer = answer_ok(read(&bridge, Command::Pin, vec![], "PinRead").await?)?;
     let pin = pin_from_params(&answer).map_err(bad_answer)?;
     info!("Cloud relay PIN read through the API");
@@ -573,7 +619,7 @@ pub async fn post_pin(
     bridge: Shared,
     features: Features,
 ) -> Result<HttpResponse, ApiError> {
-    require(features.pin_write, "pin_write")?;
+    require(features.get().pin_write, "pin_write")?;
     if !(5..=10).contains(&body.pin.len()) || !body.pin.bytes().all(|b| b.is_ascii_alphanumeric()) {
         return Err(ApiError::InvalidParameter(
             "pin must have 5 to 10 letters or digits".into(),
@@ -598,7 +644,7 @@ pub async fn post_module_restart(
     bridge: Shared,
     features: Features,
 ) -> Result<HttpResponse, ApiError> {
-    require(features.module_restart, "module_restart")?;
+    require(features.get().module_restart, "module_restart")?;
     queue_command(
         &bridge,
         Command::Rst,
@@ -617,7 +663,7 @@ pub async fn post_module_restart(
     responses((status = 200, body = Vec<WifiNetwork>), (status = 403), (status = 502), (status = 503), (status = 504)),
     tag = "module")]
 pub async fn get_wifi_scan(bridge: Shared, features: Features) -> Result<HttpResponse, ApiError> {
-    require(features.wifi_scan, "wifi_scan")?;
+    require(features.get().wifi_scan, "wifi_scan")?;
     let answer = answer_ok(read(&bridge, Command::Scn, vec![], "WifiScan").await?)?;
     let mut networks = WifiNetwork::list_from_params(&answer).map_err(bad_answer)?;
     networks.sort_by_key(|n| std::cmp::Reverse(n.rssi));
@@ -640,7 +686,7 @@ struct CloudResponse {
     responses((status = 200), (status = 403), (status = 502), (status = 503), (status = 504)),
     tag = "module")]
 pub async fn get_cloud(bridge: Shared, features: Features) -> Result<HttpResponse, ApiError> {
-    require(features.cloud_read, "cloud_read")?;
+    require(features.get().cloud_read, "cloud_read")?;
     let balancer = answer_ok(read(&bridge, Command::Bal, vec![], "CloudBalancer").await?)?;
     let server = answer_ok(read(&bridge, Command::Clu, vec![], "CloudServer").await?)?;
     let upload = answer_ok(read(&bridge, Command::Crw, vec![], "CloudLastUpload").await?)?;
@@ -673,7 +719,10 @@ pub async fn get_firmware(
     bridge: Shared,
     features: Features,
 ) -> Result<HttpResponse, ApiError> {
-    require(features.firmware_update_check, "firmware_update_check")?;
+    require(
+        features.get().firmware_update_check,
+        "firmware_update_check",
+    )?;
     let installed_text = bridge
         .state()
         .inf_if_received()
@@ -719,6 +768,8 @@ pub async fn get_firmware(
 /// Routes of the module features
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.route("/api/features", web::get().to(get_features))
+        .route("/api/features", web::post().to(post_features))
+        .route("/api/config", web::get().to(get_config))
         .route("/api/chrono/schedule", web::get().to(get_schedule))
         .route("/api/chrono/schedule", web::post().to(post_schedule))
         .route("/api/clock", web::get().to(get_clock))
@@ -766,7 +817,7 @@ mod tests {
         let app = atest::init_service(
             App::new()
                 .app_data(web::Data::from(Arc::clone(bridge)))
-                .app_data(web::Data::new(features))
+                .app_data(web::Data::new(FeatureSettings::fixed(features)))
                 .configure(configure_all),
         )
         .await;
@@ -828,6 +879,63 @@ mod tests {
         assert_eq!(body["chrono_schedule_read"], true);
         assert_eq!(body["pin_read"], true);
         assert_eq!(body["pin_write"], false);
+    }
+
+    #[actix_web::test]
+    async fn features_change_only_when_allowed() {
+        let bridge = Arc::new(Bridge::new());
+        let (status, body) = post(
+            &bridge,
+            FeaturesConfig::default(),
+            "/api/features",
+            json!({"clock_write": true}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(body["error"].as_str().unwrap().contains("edit_features"));
+
+        let settings = web::Data::new(FeatureSettings::new(FeaturesConfig::default(), None, true));
+        let app = atest::init_service(
+            App::new()
+                .app_data(web::Data::from(Arc::clone(&bridge)))
+                .app_data(settings.clone())
+                .configure(configure_all),
+        )
+        .await;
+        let request = |body: Value| {
+            atest::TestRequest::post()
+                .uri("/api/features")
+                .set_json(body)
+                .to_request()
+        };
+        let response = atest::call_service(&app, request(json!({"coffee": true}))).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let response = atest::call_service(
+            &app,
+            request(json!({"clock_write": true, "clock_read": true})),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value = atest::read_body_json(response).await;
+        assert_eq!(body["features"]["clock_write"], true);
+        assert!(body["saved_to"].is_null());
+        // Applied at once: the endpoint it gates is no longer refused
+        let response = atest::call_service(
+            &app,
+            atest::TestRequest::post()
+                .uri("/api/clock")
+                .set_json(json!({"utc": 1757930400}))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = atest::call_service(
+            &app,
+            atest::TestRequest::get().uri("/api/config").to_request(),
+        )
+        .await;
+        let body: Value = atest::read_body_json(response).await;
+        assert_eq!(body["edit_features"], true);
     }
 
     #[actix_web::test]

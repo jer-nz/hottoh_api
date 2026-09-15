@@ -10,6 +10,8 @@ pub mod alarms;
 pub mod config;
 /// Search of the stove on the local network
 pub mod discovery;
+/// Optional module features, changed while running and saved to the configuration file
+pub mod features;
 /// Check of the HottoH update server for a newer module firmware
 pub mod firmware_update;
 /// Constants used throughout the application

@@ -93,6 +93,8 @@ Writes are asynchronous, like the settings above.
 | Endpoint | Feature | Content |
 |---|---|---|
 | `GET /api/features` | - | Enabled and disabled features |
+| `POST /api/features` | `[http_api] edit_features` | `{"clock_write": true}`: enables or disables features at once and saves them to `config.ini` (`saved_to`); 403 when not allowed |
+| `GET /api/config` | - | `{"file": "/etc/hottoh_api/config.ini", "edit_features": true}`: configuration file in use, whether features can be changed |
 | `GET /api/chrono/schedule` | `chrono_schedule_read` | Weekly schedule (takes about 2 s, see below) |
 | `POST /api/chrono/schedule` | `chrono_schedule_write` | Replaces the schedule of some days |
 | `GET /api/clock` | `clock_read` | Module clock (UTC), stove clock (local), offset from the bridge |
@@ -108,6 +110,20 @@ Writes are asynchronous, like the settings above.
 | `GET /api/wifi/scan` | `wifi_scan` | Networks seen by the module (BSSID, SSID, RSSI, security), strongest first |
 | `GET /api/cloud` | `cloud_read` | HottoH relay balancer (AppFire cloud mode), 4-noks cloud server, last upload |
 | `GET /api/firmware[?refresh=true]` | `firmware_update_check` | Installed firmware, newest one on the HottoH update server, `update_available` |
+
+`POST /api/features` rewrites only the lines of the `[features]` section (missing keys are added
+at its end, comments and other sections are kept). The file must be writable by the user running
+hottoh_api; when it cannot be written, nothing changes (HTTP 500). Without a configuration file,
+changes last until hottoh_api stops.
+
+### Clock
+
+The stove board has a local clock **to the minute**, set by the module after `POST /api/clock` or
+`POST /api/timezone`. The module clock is not an independent reference: seen on firmware 10.5.0, it
+barely advances between reads and snaps back to the minute of the stove, so `module_offset_s`
+(module minus the computer running hottoh_api) swings between about 0 and -60 s even right after a
+write. Compare `stove_time` with the local time instead: when the stove is a minute or more off,
+send `POST /api/clock {}` (keep the computer running hottoh_api synchronised with NTP).
 
 ### Weekly schedule
 

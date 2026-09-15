@@ -2,7 +2,33 @@
 
 ## Unreleased
 
-Fixes found by a test on a real stove (full ignition and shutdown cycle).
+### Features changed from the interface
+
+- `POST /api/features` enables or disables features while running and saves them to the
+  `[features]` section of `config.ini` (only those lines are rewritten, comments kept). Allowed by the
+  new `[http_api] edit_features` (default: only without configuration file). `GET /api/config` gives
+  the file in use and whether features can be changed.
+- Module tab: a switch for each feature, grouped by topic; the risky ones turn orange.
+
+### Module tab redesigned
+
+- Wi-Fi module card: host name, firmware, signal, address, **date and time of the module** (running
+  clock, its offset when it drifts) and time zone, manufacturer, stove setup.
+- Nothing is asked to the HottoH servers or the module without a click: the firmware check, the
+  cloud servers and the data logger are read on demand (Details card). Only the clock and time zone
+  are read when the tab opens.
+- Details card: clocks (module, computer, stove to the minute, offsets), data logger, cloud and PIN.
+- Tools card: set the clock, time zone, Wi-Fi scan, relay PIN, clear the history, restart the
+  module; a disabled one says which feature to enable.
+
+### Interface fixes
+
+- Phone: the day timeline of the schedule no longer scrolls sideways to reach the afternoon; it is
+  shown as two half days, one above the other. Day tabs and power levels fit on one line.
+- Gaps: empty alarm and discovery placeholders no longer add space above the dashboard cards;
+  temperature tiles fill the row.
+
+### Fixes found by a test on a real stove (full ignition and shutdown cycle)
 
 - Web interface: the power applied by the stove (`index_power_level`) is shown in percent, as the
   stove display does (it showed "100 / 10"); the button of the matching level is marked. Same in
