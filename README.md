@@ -116,9 +116,14 @@ through the HottoH cloud relay and both work side by side.
 ## Compatibility
 
 - Stoves with the HottoH Wi-Fi module "Wifier 2.0", reachable on the local network (TCP port 5001).
-- Built and tested against module firmware **10.5.0**, on a real stove. Older firmware 10.1.0
-  works but drops its Wi-Fi link every few minutes: updating it with AppFire is recommended.
+- Built and tested against module firmware **10.5.0**, on a real stove. Firmware 10.1.0 and below
+  work too, but may drop their Wi-Fi link every few minutes: if that happens, updating them with
+  AppFire is recommended ([how](docs/WIFI_DROPS.md)).
 - Windows (amd64), macOS (Apple silicon), Linux (amd64, arm64).
+
+> **You cannot connect your stove to Wi-Fi, or it keeps dropping off every five minutes or so?**
+> It is most likely a bug of the module firmware 10.1.0 and below, not your network, and the
+> module drops off too fast to be updated as it is. Read [why it happens and how to update it anyway](docs/WIFI_DROPS.md).
 
 ## Security
 
@@ -133,11 +138,21 @@ restart the module are disabled by default ([`[features]`](docs/CONFIGURATION.md
 - [HTTP API](docs/API.md): Swagger UI, endpoints, writes, module features, Home Assistant example.
 - [Building and development](docs/BUILD.md): building from source, project structure, protocol
   notes, publishing a release.
+- [Stove won't connect to Wi-Fi or keeps dropping off](docs/WIFI_DROPS.md): the bug of firmware
+  10.1.0 and below, explained and fixed.
 - [Changelog](CHANGELOG.md).
 
 ## Credits
 
-Based on the work of benlbrm on [hottohpy](https://github.com/benlbrm/hottohpy), with many thanks. hottoh_api is not affiliated with HottoH or any stove manufacturer.
+hottoh_api started from the work of benlbrm on [hottohpy](https://github.com/benlbrm/hottohpy),
+with many thanks. The protocol has since been reverse-engineered from the source: the HottoH
+AppFire Android app was decompiled and the firmware of the Wifier 2.0 module (ESP32) was
+disassembled. This confirmed every field of the stove status against the module's own register
+map, and uncovered the commands the app does not expose (cloud relay PIN, Wi-Fi scan, firmware
+update, module settings), as well as the [cause of the Wi-Fi drops](docs/WIFI_DROPS.md) of
+firmware 10.1.0 and below.
+
+hottoh_api is not affiliated with HottoH or any stove manufacturer.
 
 ## Contributing
 
