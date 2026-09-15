@@ -593,7 +593,25 @@ details.raw summary > span:first-child { margin-right: auto; }
   .segmented.fill button { min-width: 0; padding: 0; }
   .day-tabs { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
   .day-tabs button { min-width: 0; padding: 0; }
-  .kv { grid-template-columns: minmax(95px, auto) 1fr; }
+  /* Recent requests: one compact block per request instead of 7 columns */
+  .requests-table thead { display: none; }
+  .requests-table tr { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "id cmd status" "time time tries" "value value value" "msg msg msg"; gap: 2px 10px; padding: 9px 0; border-bottom: 1px solid var(--border); }
+  .requests-table tr:last-child { border-bottom: 0; }
+  .requests-table td { display: block; padding: 0; border: 0; }
+  .requests-table td:empty { display: none; }
+  .requests-table td:nth-child(1) { grid-area: id; color: var(--muted); }
+  .requests-table td:nth-child(2) { grid-area: time; color: var(--muted); font-size: 0.78rem; }
+  .requests-table td:nth-child(3) { grid-area: cmd; font-weight: 600; overflow-wrap: anywhere; }
+  .requests-table td:nth-child(4) { grid-area: value; }
+  .requests-table td:nth-child(5) { grid-area: status; }
+  .requests-table td:nth-child(6) { grid-area: tries; color: var(--muted); font-size: 0.78rem; text-align: right; }
+  .requests-table td:nth-child(6)::before { content: "× "; }
+  .requests-table td:nth-child(7) { grid-area: msg; }
+    /* Label above its value: a long label no longer squeezes the value into a narrow column */
+  .kv { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .kv dt { font-size: 0.78rem; }
+  .kv dd { margin-bottom: 10px; }
+  .kv dd:last-child { margin-bottom: 0; }
 }
 
 /* ---------- Schedule editor ---------- */

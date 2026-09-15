@@ -2224,6 +2224,14 @@
       });
     }
 
+    /** Time only for today, date and time otherwise */
+    function shortTime(date) {
+      if (!date) return '—';
+      return date.toDateString() === new Date(bridgeNow()).toDateString()
+        ? date.toLocaleTimeString(lang, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+        : fmtDateTime(date, true);
+    }
+
     let busy = false;
     async function update() {
       const st = store.status;
@@ -2271,10 +2279,10 @@
       busy = false;
       requestsBody.textContent = '';
       if (!requests.length) { requestsBody.append(h('div', { class: 'empty', text: t('requests_empty') })); return; }
-      requestsBody.append(h('table', null,
+      requestsBody.append(h('table', { class: 'requests-table' },
         h('thead', null, h('tr', null, [t('id'), t('created'), t('command'), t('value'), t('status'), t('attempts'), ''].map((x) => h('th', { text: x })))),
         h('tbody', null, requests.map((r) => h('tr', null,
-          h('td', { class: 'mono', text: r.request_id }), h('td', { text: fmtDateTime(parseDate(r.created_at), true) }),
+          h('td', { class: 'mono', text: r.request_id }), h('td', { class: 'nowrap', text: shortTime(parseDate(r.created_at)) }),
           h('td', { text: r.command }), h('td', { class: 'mono wrap', text: r.value }), h('td', null, statusPill(r.status)),
           h('td', { text: r.attempts }),
           h('td', { class: 'muted small wrap', text: r.error_code !== undefined ? `${r.error_code} · ${r.message || errorText(r.error_code)}` : r.message || '' }))))));
