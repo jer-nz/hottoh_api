@@ -29,6 +29,6 @@ docker run --rm -v "$dir:/pkg:ro" "$image" sh -euxc "
     kill -0 \$pid
     kill \$pid
     wait \$pid || true
-    grep -q 'Starting HTTP server on 0.0.0.0:3000' /tmp/hottoh_api_r*.log
+    grep -q 'HTTP server on 0.0.0.0:3000' /tmp/hottoh_api_r*.log
 "
 echo "OK: $file"

@@ -1004,7 +1004,12 @@ mod tests {
             bytes.extend(answer(r));
             Reply::Split(bytes)
         });
-        let worker = Worker::start(address, fast_timings(), |_| {});
+        // Timeouts are not tested here: a slow CI runner must not turn the 20 ms split into one
+        let timings = Timings {
+            response: Duration::from_secs(1),
+            ..fast_timings()
+        };
+        let worker = Worker::start(address, timings, |_| {});
         worker.wait_for("DAT pages", |b| b.state().dat1_if_received().is_some());
         let stats = worker.bridge.state().connection().stats.clone();
         assert_eq!(stats.timeouts, 0);
