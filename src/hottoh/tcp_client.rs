@@ -9,7 +9,9 @@
 //! A single thread owns the connection. Requests queued by the HTTP API (writes, and reads
 //! made on demand) are sent first; the INF and DAT pages are polled in between.
 
+use crate::hottoh::discovery;
 use crate::hottoh::hottoh_const::{Command, CommandType, error_message};
+use crate::hottoh::hottoh_structs::now;
 use crate::hottoh::hottoh_structs::{CommandData, DAT0Data, INFData};
 use crate::hottoh::module_data::Outcome;
 use crate::hottoh::shared_struct::{Bridge, QueuedRequest, RequestState};
@@ -31,6 +33,20 @@ const MAX_ATTEMPTS: u32 = 3;
 const SLOW_ANSWER_FACTOR: u32 = 4;
 /// While the stove stays unreachable, one connection failure in this many is logged as a warning
 const FAILURES_PER_WARNING: u32 = 60;
+/// Without configured address: failed connections before searching the network again (the
+/// module may have got another address)
+const FAILURES_BEFORE_NEW_SEARCH: u32 = 6;
+/// Without configured address: pause between two searches of the network
+const SEARCH_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Where the stove is
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StoveTarget {
+    /// Configured address (`host:port`)
+    Fixed(String),
+    /// Searched on the local network, on this port
+    Discover(u16),
+}
 
 /// Delays used by the worker
 #[derive(Debug, Clone)]
@@ -129,16 +145,22 @@ impl Drop for ExitOnUnexpectedEnd {
 
 /// TCP client for the stove
 pub struct TcpClient {
-    address: String,
+    target: StoveTarget,
+    /// Address in use (`host:port`), `None` until the stove is found
+    address: Option<String>,
     poll_interval: Duration,
     timings: Timings,
     bridge: Arc<Bridge>,
 }
 
 impl TcpClient {
-    pub fn new(address: String, poll_interval: Duration, bridge: Arc<Bridge>) -> Self {
+    pub fn new(target: StoveTarget, poll_interval: Duration, bridge: Arc<Bridge>) -> Self {
         Self {
-            address,
+            address: match &target {
+                StoveTarget::Fixed(address) => Some(address.clone()),
+                StoveTarget::Discover(_) => None,
+            },
+            target,
             poll_interval,
             timings: Timings::default(),
             bridge,
@@ -152,8 +174,10 @@ impl TcpClient {
     }
 
     /// Starts the worker thread
-    pub fn start(self) -> thread::JoinHandle<()> {
-        self.bridge.state_mut().set_stove_address(&self.address);
+    pub fn start(mut self) -> thread::JoinHandle<()> {
+        if let Some(address) = &self.address {
+            self.bridge.state_mut().set_stove_address(address);
+        }
         thread::Builder::new()
             .name("tcp-worker".into())
             .spawn(move || {
@@ -165,11 +189,24 @@ impl TcpClient {
     }
 
     /// Connects, serves the connection, and reconnects until the application stops
-    fn run(&self) {
+    fn run(&mut self) {
         let mut failures: u32 = 0;
         let mut down_since: Option<Instant> = None;
+        let mut last_search: Option<Instant> = None;
 
         while self.bridge.is_running() {
+            if let StoveTarget::Discover(port) = self.target {
+                let due = last_search.is_none_or(|t| t.elapsed() >= SEARCH_INTERVAL);
+                if due && (self.address.is_none() || failures >= FAILURES_BEFORE_NEW_SEARCH) {
+                    last_search = Some(Instant::now());
+                    self.search(port);
+                }
+                if self.address.is_none() {
+                    self.drop_expired_requests();
+                    self.bridge.sleep(self.timings.reconnect);
+                    continue;
+                }
+            }
             let error = match self.connect() {
                 Ok((stream, addr)) => {
                     match down_since.take() {
@@ -229,12 +266,51 @@ impl TcpClient {
         }
     }
 
+    /// Searches the local network for the module and keeps the address found
+    fn search(&mut self, port: u16) {
+        let network = discovery::local_ipv4().map(discovery::network_of).ok();
+        {
+            let mut state = self.bridge.state_mut();
+            let status = state.discovery_mut();
+            status.searching = true;
+            status.network = network;
+        }
+        info!("Searching the stove on the local network (port {})", port);
+        let outcome = discovery::scan(port);
+        let result = match &outcome {
+            Ok(found) if found.is_empty() => "no HottoH module found".to_string(),
+            Ok(found) => {
+                let module = &found[0];
+                let address = module.address.to_string();
+                if self.address.as_deref() != Some(address.as_str()) {
+                    info!(
+                        "Stove found at {} ({} firmware {})",
+                        address, module.hostname, module.version
+                    );
+                    self.bridge.state_mut().set_stove_address(&address);
+                    self.address = Some(address.clone());
+                }
+                format!("found {} ({})", address, module.hostname)
+            }
+            Err(e) => format!("search failed: {}", e),
+        };
+        if !matches!(&outcome, Ok(found) if !found.is_empty()) {
+            warn!("Stove search: {}", result);
+        }
+        let mut state = self.bridge.state_mut();
+        let status = state.discovery_mut();
+        status.searching = false;
+        status.last_scan_at = Some(now());
+        status.last_result = Some(result);
+    }
+
     fn resolve(&self) -> Result<SocketAddr, String> {
-        self.address
+        let address = self.address.as_deref().unwrap_or_default();
+        address
             .to_socket_addrs()
-            .map_err(|e| format!("cannot resolve {}: {}", self.address, e))?
+            .map_err(|e| format!("cannot resolve {}: {}", address, e))?
             .next()
-            .ok_or_else(|| format!("cannot resolve {}", self.address))
+            .ok_or_else(|| format!("cannot resolve {}", address))
     }
 
     fn connect(&self) -> Result<(TcpStream, SocketAddr), String> {
@@ -590,18 +666,39 @@ impl TcpClient {
             }
         };
 
-        let mut state = self.bridge.state_mut();
-        match data {
-            CommandData::Inf(data) => {
-                log_inf_changes(state.inf_if_received(), &data);
-                state.set_inf(data);
+        let alarms_changed = {
+            let mut state = self.bridge.state_mut();
+            match data {
+                CommandData::Inf(data) => {
+                    log_inf_changes(state.inf_if_received(), &data);
+                    state.set_inf(data);
+                    false
+                }
+                CommandData::Dat0(data) => {
+                    log_dat0_changes(state.dat0_if_received(), &data);
+                    let changed = state.set_dat0(data);
+                    if changed {
+                        match state.alarms().current() {
+                            Some(alarm) => {
+                                warn!("Stove alarm: {} (state {})", alarm.state, alarm.state_raw)
+                            }
+                            None => info!("Stove alarm ended"),
+                        }
+                    }
+                    changed
+                }
+                CommandData::Dat1(data) => {
+                    state.set_dat1(data);
+                    false
+                }
+                CommandData::Dat2(data) => {
+                    state.set_dat2(data);
+                    false
+                }
             }
-            CommandData::Dat0(data) => {
-                log_dat0_changes(state.dat0_if_received(), &data);
-                state.set_dat0(data);
-            }
-            CommandData::Dat1(data) => state.set_dat1(data),
-            CommandData::Dat2(data) => state.set_dat2(data),
+        };
+        if alarms_changed {
+            self.bridge.save_alarms();
         }
     }
 }
@@ -793,9 +890,13 @@ mod tests {
         fn start(address: String, timings: Timings, setup: impl FnOnce(&Bridge)) -> Self {
             let bridge = Arc::new(Bridge::new());
             setup(&bridge);
-            let handle = TcpClient::new(address, Duration::from_millis(10), Arc::clone(&bridge))
-                .with_timings(timings)
-                .start();
+            let handle = TcpClient::new(
+                StoveTarget::Fixed(address),
+                Duration::from_millis(10),
+                Arc::clone(&bridge),
+            )
+            .with_timings(timings)
+            .start();
             Self {
                 bridge,
                 handle: Some(handle),

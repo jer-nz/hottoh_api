@@ -1,5 +1,53 @@
 # Changelog
 
+## 2.2.0
+
+### New: web interface
+
+A single page embedded in the binary (no file to install, no external resource), served at `/` next
+to the API and Swagger UI. English or French, light or dark theme, usable on a phone.
+
+- Stove: thermostat dial, on/off, eco and chrono modes, power level, fans, temperatures, current
+  alarm with what to do.
+- Schedule: temperatures of the Eco, Normal and Comfort programs, week overview, day editor with
+  periods (from, to, program) or drawn on a timeline, copy of a day to others, save of the changed
+  days only.
+- History: data logger charts over 6 h to 7 days (records kept in the browser), heating time,
+  alarm history, table view.
+- Module: firmware update check, clocks and time zone, data logger, cloud relay and PIN, Wi-Fi scan,
+  module restart and the `[features]` settings.
+- Diagnostics: link with the stove, counters, resources, recent requests, raw pages, JSON snapshot.
+- Console: any endpoint of the OpenAPI description with example bodies, and the outcome of writes.
+
+New `[web_ui]` section in `config.ini`: `enabled` (default `true`), `port` and `ip` (default: those of
+`[http_api]`). On its own port the interface server also answers the API, on the same origin.
+
+### New: runs without configuration
+
+For someone who just runs the program on Windows or macOS: without `config.ini` (argument, working
+directory or next to the program), hottoh_api searches the stove on the local network, serves the
+interface on `127.0.0.1:3000` (next ports if taken; opens the running instance if there is one) and
+opens it in the default browser.
+
+- `[stove] ip` empty or `auto`: the module is searched on the /24 network of the computer (INF
+  request on port 5001), again every minute while not found and after 30 s without connection.
+  `GET /api/status` reports the search in `discovery`.
+- Every section of `config.ini` is optional. Defaults: `[http_api] ip = 127.0.0.1`, `port = 3000`;
+  logs in the application data folder of the system.
+- `[web_ui] open_browser`.
+
+### New: alarm history
+
+- `GET /api/alarms`: current alarm and the last 100 alarms (pellets low or out, power cut, ignition
+  failure, no pellets, door open and the other states 50 to 99), kept in `alarms.json` in the log
+  directory. Alarm start and end are logged.
+
+### Changes
+
+- `GET /api/status` adds `connected_since`, the start of the current connection.
+- `GET /api/requests`: the last 100 queued requests, newest first.
+- `GET /api/timezone` adds `available`, the time zone names accepted by `POST /api/timezone`.
+
 ## 2.1.0
 
 ### New: Wi-Fi module features

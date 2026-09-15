@@ -1,9 +1,11 @@
-use crate::hottoh::config::{FeaturesConfig, HttpApiConfig};
+use crate::hottoh::config::{FeaturesConfig, HttpApiConfig, WebUiConfig};
 use crate::hottoh::hottoh_const::{ChronoMode, StoveCommands};
 use crate::hottoh::hottoh_structs::{DAT0Data, DAT1Data};
 use crate::hottoh::http_module;
 use crate::hottoh::shared_struct::{Bridge, ConnectionStatus, MAX_QUEUED};
 use crate::hottoh::stats::{ProcessInfo, process_info};
+use crate::hottoh::web_ui;
+use actix_web::dev::Server;
 use actix_web::{App, HttpResponse, HttpServer, ResponseError, middleware, web};
 use log::{info, warn};
 use serde::{Deserialize, Serialize};
@@ -84,6 +86,8 @@ type Target<Page, Limits> = (StoveCommands, fn(&Page) -> Limits);
         get_dat2,
         get_status,
         get_request_status,
+        get_requests,
+        get_alarms,
         post_on_off,
         post_eco_mode,
         post_ambiance_temp,
@@ -312,6 +316,12 @@ async fn get_request_status(bridge: Shared, id: web::Path<u32>) -> Result<HttpRe
         .ok_or_else(|| ApiError::NotFound(format!("request {}", id)))
 }
 
+/// Last queued requests (writes and reads made on demand), newest first
+#[utoipa::path(get, path = "/api/requests", responses((status = 200)), tag = "hottoh")]
+async fn get_requests(bridge: Shared) -> HttpResponse {
+    HttpResponse::Ok().json(bridge.state().recent_requests())
+}
+
 /// Turns the stove on (`true`) or off (`false`)
 #[utoipa::path(post, path = "/api/dat/set_on_off", request_body = DatPostBool,
     responses((status = 200), (status = 400), (status = 503)), tag = "hottoh")]
@@ -488,6 +498,8 @@ pub(crate) fn configure(cfg: &mut web::ServiceConfig) {
     .route("/api/dat/2", web::get().to(get_dat2))
     .route("/api/status", web::get().to(get_status))
     .route("/api/request/{id}", web::get().to(get_request_status))
+    .route("/api/requests", web::get().to(get_requests))
+    .route("/api/alarms", web::get().to(get_alarms))
     .route("/api/dat/set_on_off", web::post().to(post_on_off))
     .route("/api/dat/set_eco_mode", web::post().to(post_eco_mode))
     .route(
@@ -501,28 +513,176 @@ pub(crate) fn configure(cfg: &mut web::ServiceConfig) {
     .configure(http_module::configure);
 }
 
-/// Runs the HTTP server until SIGINT or SIGTERM (handled by actix-web)
-pub async fn start_http_server(
-    config: &HttpApiConfig,
-    features: FeaturesConfig,
-    bridge: Arc<Bridge>,
-) -> std::io::Result<()> {
-    let http_address = format!("{}:{}", config.ip, config.port);
-    info!("Starting HTTP server on {}", http_address);
-    let data = web::Data::from(bridge);
-    let features = web::Data::new(features);
-    HttpServer::new(move || {
+/// Binds and starts a server for the API, with the web interface when `with_ui` is set
+fn api_server(
+    address: &str,
+    data: web::Data<Bridge>,
+    features: web::Data<FeaturesConfig>,
+    with_ui: bool,
+) -> std::io::Result<Server> {
+    Ok(HttpServer::new(move || {
         App::new()
             .wrap(middleware::Logger::default())
             .wrap(middleware::Compress::default())
             .app_data(data.clone())
             .app_data(features.clone())
             .configure(configure)
+            .configure(|cfg| {
+                if with_ui {
+                    web_ui::configure(cfg);
+                }
+            })
     })
     .shutdown_timeout(5)
-    .bind(&http_address)?
-    .run()
-    .await
+    .bind(address)?
+    .run())
+}
+
+/// Runs the HTTP server until SIGINT or SIGTERM (handled by actix-web), and the web interface on
+/// its own address when `[web_ui]` gives one.
+///
+/// `desktop` (no configuration file): when the port is taken by another hottoh_api, its
+/// interface is opened and this one stops; when it is taken by another program, the next ports
+/// are tried.
+pub async fn start_http_server(
+    config: &HttpApiConfig,
+    web_ui: &WebUiConfig,
+    features: FeaturesConfig,
+    bridge: Arc<Bridge>,
+    desktop: bool,
+) -> std::io::Result<()> {
+    let ui_address = web_ui.separate_address(config);
+    let ui_with_api = web_ui.enabled && ui_address.is_none();
+    let open_browser = web_ui.enabled && web_ui.open_browser.unwrap_or(desktop);
+    let data = web::Data::from(bridge);
+    let features = web::Data::new(features);
+
+    let mut port = config.port;
+    let (api, http_address) = loop {
+        let address = format!("{}:{}", config.ip, port);
+        match api_server(&address, data.clone(), features.clone(), ui_with_api) {
+            Ok(server) => break (server, address),
+            Err(e) if desktop && e.kind() == std::io::ErrorKind::AddrInUse => {
+                if is_hottoh_api(&local_url(&address)) {
+                    info!(
+                        "hottoh_api already runs on {}: opening its interface",
+                        address
+                    );
+                    open_in_browser(&local_url(&address));
+                    return Ok(());
+                }
+                if port >= config.port.saturating_add(10) {
+                    return Err(e);
+                }
+                warn!(
+                    "Port {} is used by another program, trying {}",
+                    port,
+                    port + 1
+                );
+                port += 1;
+            }
+            Err(e) => return Err(e),
+        }
+    };
+    info!("HTTP server on {}", http_address);
+    let Some(ui_address) = ui_address else {
+        if ui_with_api {
+            info!("Web interface on {}", local_url(&http_address));
+            if open_browser {
+                open_in_browser(&local_url(&http_address));
+            }
+        } else {
+            info!("Web interface disabled");
+        }
+        return api.await;
+    };
+    // The API is served on the address of the interface too: same origin, no CORS
+    let ui = api_server(&ui_address, data, features, true)?;
+    info!("Web interface (with the API) on {}", local_url(&ui_address));
+    if open_browser {
+        open_in_browser(&local_url(&ui_address));
+    }
+    let ui_handle = ui.handle();
+    let ui_task = actix_web::rt::spawn(ui);
+    let result = api.await;
+    ui_handle.stop(true).await;
+    let ui_result = ui_task
+        .await
+        .unwrap_or_else(|e| Err(std::io::Error::other(e.to_string())));
+    result.and(ui_result)
+}
+
+/// URL to open on this computer for a listening address (`0.0.0.0` becomes `127.0.0.1`)
+fn local_url(address: &str) -> String {
+    let (ip, port) = address.rsplit_once(':').unwrap_or((address, ""));
+    let host = match ip {
+        "0.0.0.0" | "::" | "[::]" => "127.0.0.1",
+        other => other,
+    };
+    format!("http://{}:{}/", host, port)
+}
+
+/// Whether a hottoh_api answers at this URL (`GET /api/status`)
+fn is_hottoh_api(url: &str) -> bool {
+    use std::io::{Read, Write};
+    let Some(authority) = url
+        .strip_prefix("http://")
+        .and_then(|rest| rest.split('/').next())
+    else {
+        return false;
+    };
+    let Some(address) = std::net::ToSocketAddrs::to_socket_addrs(authority)
+        .ok()
+        .and_then(|mut a| a.next())
+    else {
+        return false;
+    };
+    let timeout = std::time::Duration::from_secs(2);
+    let Ok(mut stream) = std::net::TcpStream::connect_timeout(&address, timeout) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(timeout));
+    let request = format!(
+        "GET /api/status HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+        authority
+    );
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+    let mut answer = String::new();
+    let _ = stream.take(64 * 1024).read_to_string(&mut answer);
+    answer.contains("\"stove_address\"")
+}
+
+/// Opens a URL in the default browser of the system
+fn open_in_browser(url: &str) {
+    let mut command = if cfg!(windows) {
+        let mut c = std::process::Command::new("rundll32");
+        c.args(["url.dll,FileProtocolHandler", url]);
+        c
+    } else if cfg!(target_os = "macos") {
+        let mut c = std::process::Command::new("open");
+        c.arg(url);
+        c
+    } else {
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(url);
+        c
+    };
+    match command.spawn() {
+        Ok(_) => info!("Opening {} in the browser", url),
+        Err(e) => warn!("Cannot open the browser ({}): open {} yourself", e, url),
+    }
+}
+
+/// Current and past alarms of the stove, newest first
+#[utoipa::path(get, path = "/api/alarms", responses((status = 200)), tag = "hottoh")]
+async fn get_alarms(bridge: Shared) -> HttpResponse {
+    let state = bridge.state();
+    HttpResponse::Ok().json(json!({
+        "current": state.alarms().current(),
+        "events": state.alarms().newest_first(),
+    }))
 }
 
 #[cfg(test)]
@@ -553,6 +713,31 @@ mod tests {
         assert_eq!(to_tenths(21.25).unwrap(), 213);
         assert_eq!(to_tenths(19.94).unwrap(), 199);
         assert!(to_tenths(f32::NAN).is_err());
+    }
+
+    #[test]
+    fn local_urls() {
+        assert_eq!(local_url("0.0.0.0:3000"), "http://127.0.0.1:3000/");
+        assert_eq!(local_url("192.168.1.2:80"), "http://192.168.1.2:80/");
+    }
+
+    #[actix_web::test]
+    async fn alarms_are_listed() {
+        let bridge = bridge_with_dat0();
+        let (status, body) = call(&bridge, atest::TestRequest::get().uri("/api/alarms")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["current"].is_null());
+        let raw = "0;9;0;1;33;60;1;0;2;215;220;50;300;-15;0;0;0;0;0;0;0;1450;\
+                   3;3;1;5;1200;3;3;5;0;0;0;0;0;0";
+        let fields: Vec<String> = raw.split(';').map(str::to_string).collect();
+        assert!(
+            bridge
+                .state_mut()
+                .set_dat0(DAT0Data::from_slice(&fields).unwrap())
+        );
+        let (_, body) = call(&bridge, atest::TestRequest::get().uri("/api/alarms")).await;
+        assert_eq!(body["current"]["state"], "IgnitionFailed");
+        assert_eq!(body["events"].as_array().unwrap().len(), 1);
     }
 
     #[test]
@@ -676,5 +861,13 @@ mod tests {
 
         let (status, _) = call(&bridge, atest::TestRequest::get().uri("/api/request/42")).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+
+        bridge.queue_write(StoveCommands::EcoMode, 1).unwrap();
+        bridge.queue_write(StoveCommands::PowerLevel, 3).unwrap();
+        let (status, body) = call(&bridge, atest::TestRequest::get().uri("/api/requests")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.as_array().unwrap().len(), 2);
+        assert_eq!(body[0]["command"], "PowerLevel");
+        assert_eq!(body[1]["status"], "pending");
     }
 }

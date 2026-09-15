@@ -20,12 +20,28 @@ and error codes).
 - Robust TCP link: frame reassembly, CRC and length checks, automatic reconnection
 - Built for long-running use: bounded queues, panics logged and supervised, periodic statistics
   (counters, latency, memory, threads, file descriptors)
+- Web interface embedded in the binary: thermostat, weekly schedule editor, history charts, module
+  settings, diagnostics and an API console
 - RESTful HTTP API with Swagger documentation
 - Asynchronous writes with status tracking (`/api/request/{id}`)
 - Weekly chrono schedule, module and stove clocks, time zone, history recorded by the module
   (data logger), cloud relay PIN and module restart, each one enabled or disabled in `[features]`
-- Connection monitoring (`/api/status`)
+- Connection monitoring (`/api/status`) and alarm history (`/api/alarms`)
+- Runs without configuration: searches the stove on the local network and opens the interface
 - Very low CPU and memory usage (about 10 MiB)
+
+## Quick start on Windows or macOS
+
+1. Download `hottoh_api-windows-amd64.exe` or `hottoh_api-macos-arm64` from the
+   [releases](https://github.com/jer-nz/hottoh_api/releases), on a computer connected to the same
+   network as the stove.
+2. Run it (on macOS, allow it once in System Settings → Privacy & Security). Close the AppFire
+   application, or switch it to cloud mode: the Wi-Fi module accepts a single local connection.
+3. Without `config.ini`, hottoh_api searches the network for the stove, then opens
+   `http://127.0.0.1:3000/` in the default browser. Keep its window open while you use it.
+
+The interface is only reachable from this computer. To reach it from a phone, or to run hottoh_api
+as a service, write a [configuration](#configuration).
 
 ## Important: one client at a time
 
@@ -88,17 +104,27 @@ cargo build --release
 
 ### Configuration
 
-`config.ini`:
+`config.ini`, given as argument, or found in the working directory or next to the program. Every
+section and setting is optional; without any file, hottoh_api runs as on a desktop (see
+[Quick start](#quick-start-on-windows-or-macos)): stove searched on the network, interface on
+`127.0.0.1:3000` opened in the browser, logs in the application data folder of the system
+(`%LOCALAPPDATA%\hottoh_api\logs`, `~/Library/Logs/hottoh_api`, `~/.local/state/hottoh_api/logs`).
 
 ```ini
 [stove]
-ip = 192.168.1.100      # stove IP address
-port = 5001             # stove TCP port
+ip = 192.168.1.100      # stove IP address; empty or auto: searched on the local network
+port = 5001             # stove TCP port (default 5001)
 poll_interval_ms = 1000 # optional, pause between two polling cycles (INF + DAT 0/1/2)
 
 [http_api]
-ip = 0.0.0.0            # listen on all interfaces
-port = 3000             # HTTP API port
+ip = 0.0.0.0            # listen on all interfaces (default 127.0.0.1: this computer only)
+port = 3000             # HTTP API port (default 3000)
+
+[web_ui]                # optional section, defaults shown
+enabled = true          # web interface
+# port = 8080           # own port (default: the [http_api] port)
+# ip = 0.0.0.0          # own address (default: the [http_api] address)
+# open_browser = false  # open the interface at startup (default: only without config.ini)
 
 [log]
 level = info            # trace, debug, info, warn, error (per module: "debug, actix_server = info")
@@ -130,6 +156,17 @@ enabled by default. Features that change the setup of the module (clock, time zo
 data or restart the module are disabled and must be enabled explicitly; a disabled feature answers
 HTTP 403. `GET /api/features` shows the current settings, the startup log lists the enabled ones.
 
+Stove search: when `[stove] ip` is empty or `auto`, every host of the local /24 network (the one
+of the default route) is tried on the module port, and the first one answering like a HottoH
+module is used. The search runs again every minute while nothing is found, and after 30 s without
+connection (the module may have got another address from DHCP). `GET /api/status` shows its state
+in `discovery`.
+
+`[web_ui]` serves the [web interface](#web-interface) at `/` on the API port. With its own `port`
+(or `ip`), a second server answers there with the interface **and** the API, so that the page keeps
+talking to the API on its own origin; the API port then serves the API only. `enabled = false`
+removes the interface, the API and Swagger UI are not affected.
+
 At `debug` level every exchange with the stove is logged (sent frame, answer, delay), about
 1 GiB per month before compression: use it to investigate a problem or test stability, with
 `compress = true`.
@@ -141,6 +178,27 @@ At `debug` level every exchange with the stove is logged (sent frame, answer, de
 ```
 
 or `./target/release/hottoh_api` with `config.ini` in the current directory.
+
+## Web interface
+
+`http://localhost:3000/` (or the `[web_ui]` port): a single page embedded in the binary, without any
+external resource, that uses the HTTP API below. English or French (browser language, switch in the
+top bar), light or dark theme.
+
+| Section | Content |
+|---|---|
+| Stove | Thermostat dial (drag, buttons or arrow keys), on/off with confirmation, eco and chrono modes, power level, fans, temperatures of the sensors present, current alarm with what to do |
+| Schedule | Temperatures of the Eco, Normal and Comfort programs (1, 2, 3); week overview; day editor with periods (from, to, program) or drawn on a timeline; copy of a day to others; save of the changed days only |
+| History | Data logger over 6 h to 7 days (kept in the browser, only new records are read): room, smoke (and water) temperatures, power level, heating time, alarm history, table view |
+| Module | Firmware and update check, clocks and time zone, data logger, cloud relay and PIN, Wi-Fi scan, module restart, features |
+| Diagnostics | Link with the stove, bridge resources, counters, recent requests (`/api/requests`), raw data pages, JSON snapshot for bug reports |
+| Console | Any endpoint of the OpenAPI description, example bodies, answer and outcome of queued writes, activity of the page |
+
+Controls follow `[features]`: a disabled feature shows why instead of the control. Writes show their
+outcome (`/api/request/{id}`) and the value refused by the stove is not kept. Actions that change the
+module setup, delete data or turn the stove on or off ask for confirmation.
+
+The interface has no authentication, like the API: keep the bridge on a trusted network.
 
 ## API Documentation
 
@@ -156,6 +214,8 @@ Swagger UI: `http://localhost:3000/swagger-ui/`
 | `/api/dat/2` | Flow switch, pump, actual fan speeds, puffer/boiler/DHW/room 3 temperatures |
 | `/api/status` | Link with the stove (`connected`, `last_response_at`, `last_error`), `pending_writes`, `uptime_s`, counters (`stats`) and process resources (`process`) |
 | `/api/request/{id}` | Outcome of a write: `pending`, `sent`, `ok`, `error` (with `error_code`) or `timeout` |
+| `/api/requests` | The last 100 queued requests (writes and reads made on demand), newest first |
+| `/api/alarms` | Current alarm (`current`) and the last 100 alarms (`events`, newest first): `state`, `state_raw`, `started_at`, `ended_at` |
 
 The [module features](#module-features) add the weekly schedule, clocks, time zone, data logger
 and PIN.
@@ -209,7 +269,7 @@ refuses). Writes are asynchronous like the settings above.
 | `POST /api/chrono/schedule` | `chrono_schedule_write` | Replaces the schedule of some days |
 | `GET /api/clock` | `clock_read` | Module clock (UTC), stove clock (local), offset from the bridge |
 | `POST /api/clock` | `clock_write` | `{}` (clock of the bridge) or `{"utc": 1757930400}`: sets the module and stove clocks |
-| `GET /api/timezone` | `timezone_read` | `{"zone": "Europe/Paris", "known": true}` |
+| `GET /api/timezone` | `timezone_read` | `{"zone": "Europe/Paris", "known": true, "available": [...]}` (`available`: names accepted by `POST`) |
 | `POST /api/timezone` | `timezone_write` | `{"zone": "Europe/Paris"}`, a name offered by AppFire; the module then sets the stove clock |
 | `GET /api/datalog/info` | `datalog_read` | Time of the oldest and newest records |
 | `GET /api/datalog?from=<utc>&count=<n>` | `datalog_read` | Records from the first one at or after `from` (default: one hour ago), `count` 1 to 100 (default 60) |
@@ -309,7 +369,9 @@ disconnect or break the module and are not exposed.
 - `packaging/` - nFPM configuration, OpenRC and systemd services, package scripts
 - `src/main.rs` - Application entry point
 - `src/hottoh/` - Main module directory
+  - `alarms.rs` - Alarm history (kept in `alarms.json` in the log directory)
   - `config.rs` - Configuration handling
+  - `discovery.rs` - Search of the stove on the local network
   - `http_api.rs` - HTTP API implementation (data pages and settings)
   - `http_module.rs` - HTTP endpoints of the module features
   - `module_data.rs` - Schedule, clock, time zone, data logger, PIN, Wi-Fi scan and cloud answers
@@ -321,6 +383,8 @@ disconnect or break the module and are not exposed.
   - `hottoh_structs.rs` - Data pages and CRC
   - `shared_struct.rs` - State shared between the TCP worker and the HTTP API (`Bridge`)
   - `stats.rs` - Periodic statistics line and process metrics
+  - `web_ui.rs` - Web interface routes
+- `web/` - Web interface (`index.html`, `app.css`, `app.js`), embedded in the binary at build time
 
 ## Publishing a release
 

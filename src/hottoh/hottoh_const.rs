@@ -256,6 +256,14 @@ impl From<u16> for StoveState {
     }
 }
 
+impl StoveState {
+    /// States reported as alarms: pellets low or out, power cut, and the 50 to 99 range that
+    /// AppFire shows as alarms (ignition failure, no pellets, door open...)
+    pub fn is_alarm(raw: u16) -> bool {
+        matches!(raw, 14..=16 | 50..=99)
+    }
+}
+
 impl fmt::Display for StoveState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

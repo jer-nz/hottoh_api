@@ -1,10 +1,13 @@
 //! State shared between the TCP worker, the HTTP API and the statistics thread.
 
+use crate::hottoh::alarms::{self, AlarmLog};
 use crate::hottoh::hottoh_const::{Command, CommandType, StoveCommands};
 use crate::hottoh::hottoh_structs::{DAT0Data, DAT1Data, DAT2Data, INFData, now};
 use crate::hottoh::tcp_client_structs::Request;
+use log::warn;
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::thread;
@@ -107,9 +110,26 @@ pub struct ConnectionStatus {
     /// Last connection or communication error (kept after recovery, see `last_error_at`)
     pub last_error: Option<String>,
     pub last_error_at: Option<String>,
+    /// Start of the current connection (`None` while disconnected)
+    pub connected_since: Option<String>,
     /// Successful TCP connections since start (1 = never reconnected)
     pub connections: u64,
+    /// Search of the stove on the local network, when no address is configured
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub discovery: Option<DiscoveryStatus>,
     pub stats: Stats,
+}
+
+/// Search of the stove on the local network
+#[derive(Debug, Serialize, Clone, Default)]
+pub struct DiscoveryStatus {
+    /// A scan is running
+    pub searching: bool,
+    /// Network scanned (`192.168.1.0/24`)
+    pub network: Option<String>,
+    pub last_scan_at: Option<String>,
+    /// Outcome of the last scan
+    pub last_result: Option<String>,
 }
 
 /// Data and request tracking, behind the lock of [`Bridge`]
@@ -125,6 +145,7 @@ pub struct SharedState {
     connection: ConnectionStatus,
     requests: HashMap<u32, RequestStatus>,
     request_order: VecDeque<u32>,
+    alarms: AlarmLog,
 }
 
 impl SharedState {
@@ -164,9 +185,26 @@ impl SharedState {
         self.inf_received = true;
     }
 
-    pub fn set_dat0(&mut self, dat0: DAT0Data) {
+    /// Stores DAT page 0. Returns true when the alarm history changed.
+    pub fn set_dat0(&mut self, dat0: DAT0Data) -> bool {
+        // Without Modbus link the state register is not meaningful
+        let alarms_changed = dat0.index_valid
+            && self
+                .alarms
+                .update(dat0.index_stove_state_raw, &dat0.last_updated);
         self.dat0 = dat0;
         self.dat0_received = true;
+        alarms_changed
+    }
+
+    pub fn alarms(&self) -> &AlarmLog {
+        &self.alarms
+    }
+
+    pub fn discovery_mut(&mut self) -> &mut DiscoveryStatus {
+        self.connection
+            .discovery
+            .get_or_insert_with(Default::default)
     }
 
     pub fn set_dat1(&mut self, dat1: DAT1Data) {
@@ -193,6 +231,10 @@ impl SharedState {
     pub fn set_connected(&mut self, connected: bool) {
         if connected && !self.connection.connected {
             self.connection.connections += 1;
+            self.connection.connected_since = Some(now());
+        }
+        if !connected {
+            self.connection.connected_since = None;
         }
         self.connection.connected = connected;
     }
@@ -274,6 +316,15 @@ impl SharedState {
     pub fn get_request(&self, request_id: u32) -> Option<&RequestStatus> {
         self.requests.get(&request_id)
     }
+
+    /// Tracked requests, newest first
+    pub fn recent_requests(&self) -> Vec<&RequestStatus> {
+        self.request_order
+            .iter()
+            .rev()
+            .filter_map(|id| self.requests.get(id))
+            .collect()
+    }
 }
 
 /// Request waiting to be sent
@@ -309,6 +360,8 @@ pub struct Bridge {
     running: AtomicBool,
     started: Instant,
     started_at: String,
+    /// File keeping the alarm history
+    alarm_file: Option<PathBuf>,
 }
 
 impl Default for Bridge {
@@ -326,6 +379,24 @@ impl Bridge {
             running: AtomicBool::new(true),
             started: Instant::now(),
             started_at: now(),
+            alarm_file: None,
+        }
+    }
+
+    /// Loads the alarm history from this file and keeps it there
+    pub fn with_alarm_file(mut self, path: PathBuf) -> Self {
+        let events = alarms::load(&path);
+        self.state_mut().alarms = AlarmLog::from_events(events);
+        self.alarm_file = Some(path);
+        self
+    }
+
+    /// Writes the alarm history to its file, if any
+    pub fn save_alarms(&self) {
+        let Some(path) = &self.alarm_file else { return };
+        let events = self.state().alarms().events();
+        if let Err(e) = alarms::save(path, &events) {
+            warn!("Cannot save alarm history to {}: {}", path.display(), e);
         }
     }
 
