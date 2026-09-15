@@ -394,7 +394,8 @@ pub async fn post_clock(
     )
 }
 
-/// Time zone of the module. `known` is false when the firmware has no rule for that name.
+/// Time zone of the module. `known` is false when the firmware has no rule for that name;
+/// `available` lists the names accepted by `POST /api/timezone`.
 #[utoipa::path(get, path = "/api/timezone",
     responses((status = 200), (status = 403), (status = 502), (status = 503), (status = 504)),
     tag = "module")]
@@ -410,7 +411,8 @@ pub async fn get_timezone(bridge: Shared, features: Features) -> Result<HttpResp
         Err(_) if status.status == RequestState::Error => return Err(stove_error(code)),
         Err(e) => return Err(bad_answer(e)),
     };
-    Ok(HttpResponse::Ok().json(json!({ "zone": zone, "known": known })))
+    Ok(HttpResponse::Ok()
+        .json(json!({ "zone": zone, "known": known, "available": TIME_ZONES.as_slice() })))
 }
 
 /// Time zone to set
@@ -1041,7 +1043,9 @@ mod tests {
 
         let (status, body) = get("/api/timezone").await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(body, json!({"zone": "Europe/Nowhere", "known": false}));
+        assert_eq!(body["zone"], "Europe/Nowhere");
+        assert_eq!(body["known"], false);
+        assert_eq!(body["available"][0], "UTC");
 
         let (status, body) = get("/api/datalog/info").await;
         assert_eq!(status, StatusCode::OK);

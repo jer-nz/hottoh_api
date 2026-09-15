@@ -5,8 +5,9 @@ use hottoh::http_api::start_http_server;
 use hottoh::logger::{initialize_logger, log_panics};
 use hottoh::shared_struct::Bridge;
 use hottoh::stats::spawn_reporter;
-use hottoh::tcp_client::TcpClient;
+use hottoh::tcp_client::{StoveTarget, TcpClient};
 use log::{error, info};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -20,7 +21,17 @@ async fn main() -> std::io::Result<()> {
             std::process::exit(1);
         }
     };
-    let _logger = match initialize_logger(&config.log) {
+    let desktop = config.is_desktop();
+    if desktop {
+        println!(
+            "hottoh_api {} - no config.ini: searching the stove on the local network.\n\
+             Keep this window open while you use the interface; close it (or Ctrl+C) to stop.\n\
+             Log files: {}",
+            env!("CARGO_PKG_VERSION"),
+            config.log.directory
+        );
+    }
+    let _logger = match initialize_logger(&config.log, desktop) {
         Ok(handle) => handle,
         Err(e) => {
             eprintln!("Failed to initialize logger: {}", e);
@@ -28,11 +39,21 @@ async fn main() -> std::io::Result<()> {
         }
     };
     log_panics();
+    let target = match config.stove.fixed_address() {
+        Some(address) => StoveTarget::Fixed(address),
+        None => StoveTarget::Discover(config.stove.port),
+    };
     info!(
-        "Starting hottoh_api {} (stove {}:{}, poll every {} ms, HTTP {}:{}, log level '{}')",
+        "Starting hottoh_api {} (config {}, stove {}, poll every {} ms, HTTP {}:{}, log level '{}')",
         env!("CARGO_PKG_VERSION"),
-        config.stove.ip,
-        config.stove.port,
+        config
+            .file
+            .as_deref()
+            .map_or("none".into(), |f| f.display().to_string()),
+        match &target {
+            StoveTarget::Fixed(address) => address.clone(),
+            StoveTarget::Discover(port) => format!("searched on port {}", port),
+        },
         config.stove.poll_interval_ms,
         config.http_api.ip,
         config.http_api.port,
@@ -44,9 +65,11 @@ async fn main() -> std::io::Result<()> {
         config.features.enabled().join(", ")
     );
 
-    let bridge = Arc::new(Bridge::new());
+    let bridge = Arc::new(
+        Bridge::new().with_alarm_file(Path::new(&config.log.directory).join("alarms.json")),
+    );
     let worker = TcpClient::new(
-        format!("{}:{}", config.stove.ip, config.stove.port),
+        target,
         Duration::from_millis(config.stove.poll_interval_ms),
         Arc::clone(&bridge),
     )
@@ -59,8 +82,10 @@ async fn main() -> std::io::Result<()> {
     // Returns on SIGINT or SIGTERM, or if the address cannot be bound
     let result = start_http_server(
         &config.http_api,
+        &config.web_ui,
         config.features.clone(),
         Arc::clone(&bridge),
+        desktop,
     )
     .await;
     match &result {

@@ -28,7 +28,10 @@ fn custom_format(
 /// Starts file logging with daily (or size based) rotation.
 ///
 /// The returned handle must be kept alive until the end of the program.
-pub fn initialize_logger(cfg: &LogConfig) -> Result<LoggerHandle, Box<dyn Error>> {
+///
+/// `console` also prints info messages on stderr, for someone running the program in a terminal
+/// window.
+pub fn initialize_logger(cfg: &LogConfig, console: bool) -> Result<LoggerHandle, Box<dyn Error>> {
     let cleanup = if cfg.compress {
         // The previous file stays readable, older ones are gzipped
         Cleanup::KeepLogAndCompressedFiles(1, cfg.max_log_files)
@@ -40,7 +43,11 @@ pub fn initialize_logger(cfg: &LogConfig) -> Result<LoggerHandle, Box<dyn Error>
         .log_to_file(FileSpec::default().directory(&cfg.directory).suffix("log"))
         // Unbuffered: the last lines before a crash or a kill are not lost
         .write_mode(WriteMode::Direct)
-        .duplicate_to_stderr(Duplicate::Error)
+        .duplicate_to_stderr(if console {
+            Duplicate::Info
+        } else {
+            Duplicate::Error
+        })
         .format(custom_format)
         .rotate(
             Criterion::AgeOrSize(Age::Day, cfg.max_file_size_mb.saturating_mul(1024 * 1024)),

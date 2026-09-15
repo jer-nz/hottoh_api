@@ -4,8 +4,12 @@
 //! that implement the Hottoh protocol. It includes TCP client functionality,
 //! data structures for representing stove state, and an HTTP API for remote control.
 
+/// History of the stove alarms
+pub mod alarms;
 /// Configuration handling for the application
 pub mod config;
+/// Search of the stove on the local network
+pub mod discovery;
 /// Check of the HottoH update server for a newer module firmware
 pub mod firmware_update;
 /// Constants used throughout the application
@@ -28,3 +32,5 @@ pub mod stats;
 pub mod tcp_client;
 /// Data structures for TCP client requests and responses
 pub mod tcp_client_structs;
+/// Web interface embedded in the binary
+pub mod web_ui;
