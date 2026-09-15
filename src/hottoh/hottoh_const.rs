@@ -39,14 +39,40 @@ impl CommandType {
 
 /// Command (three characters in the frame)
 ///
-/// The Wifier 2.0 firmware also knows SCN, WIC, MET, ME0, MEC, DAC, SCH, UPG, TMZ, CLK, PIN,
-/// REG, BAL, BRQ, CRW, CLU and RST, which are not used by this bridge.
+/// The Wifier 2.0 firmware 10.5.0 also knows these commands, deliberately not used by this
+/// bridge: WIC (writes the Wi-Fi settings whatever the frame type; nothing reads them back),
+/// UPG (firmware update; `R` does nothing), DAC (fills the data logger with 3000 fake records),
+/// BRQ (changes the relay server), REG (does nothing), and the writes of BAL, CLU and CRW.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
     /// Module information (hostname, firmware version, Wi-Fi signal)
     Inf,
     /// Stove data: read a page (`R`) or write a setting (`W`)
     Dat,
+    /// Weekly chrono schedule: 7 days of 48 half-hour slots (`R`, `W`)
+    Sch,
+    /// Module clock (`R`); `W` sets the module clock and the stove clock
+    Clk,
+    /// Time zone name of the module (`R`); `W` also sets the stove clock
+    Tmz,
+    /// Security PIN of the cloud relay, used by AppFire in cloud mode (`R`, `W`)
+    Pin,
+    /// Data logger records from a UTC time (`R`)
+    Met,
+    /// UTC time of the first and last data logger records (`R`)
+    Me0,
+    /// Clears the data logger (`E`)
+    Mec,
+    /// Restarts the Wi-Fi module (`E`, no answer)
+    Rst,
+    /// Wi-Fi scan (`R` without parameter); suspends the stove communication meanwhile
+    Scn,
+    /// Balancer server of the HottoH cloud relay (`R`)
+    Bal,
+    /// URL, path and port of the 4-noks cloud (`R`)
+    Clu,
+    /// UTC time of the last data logger upload to the 4-noks cloud (`R`)
+    Crw,
 }
 
 impl Command {
@@ -55,7 +81,34 @@ impl Command {
         match self {
             Command::Inf => "INF",
             Command::Dat => "DAT",
+            Command::Sch => "SCH",
+            Command::Clk => "CLK",
+            Command::Tmz => "TMZ",
+            Command::Pin => "PIN",
+            Command::Met => "MET",
+            Command::Me0 => "ME0",
+            Command::Mec => "MEC",
+            Command::Rst => "RST",
+            Command::Scn => "SCN",
+            Command::Bal => "BAL",
+            Command::Clu => "CLU",
+            Command::Crw => "CRW",
         }
+    }
+
+    /// The module takes longer to answer (the Wi-Fi scan lasts a few seconds)
+    pub fn is_slow(&self) -> bool {
+        matches!(self, Command::Scn)
+    }
+
+    /// Resending after a missing answer would repeat an action with side effects
+    pub fn can_retry(&self) -> bool {
+        !matches!(self, Command::Scn)
+    }
+
+    /// Frames of this command carry a secret and are not written to the log
+    pub fn is_sensitive(&self) -> bool {
+        matches!(self, Command::Pin)
     }
 }
 
@@ -66,10 +119,83 @@ impl FromStr for Command {
         match input {
             "INF" => Ok(Command::Inf),
             "DAT" => Ok(Command::Dat),
+            "SCH" => Ok(Command::Sch),
+            "CLK" => Ok(Command::Clk),
+            "TMZ" => Ok(Command::Tmz),
+            "PIN" => Ok(Command::Pin),
+            "MET" => Ok(Command::Met),
+            "ME0" => Ok(Command::Me0),
+            "MEC" => Ok(Command::Mec),
+            "RST" => Ok(Command::Rst),
+            "SCN" => Ok(Command::Scn),
+            "BAL" => Ok(Command::Bal),
+            "CLU" => Ok(Command::Clu),
+            "CRW" => Ok(Command::Crw),
             _ => Err(format!("Unsupported command: {}", input)),
         }
     }
 }
+
+/// Time zones offered by AppFire (`SetTimeZone`). The firmware maps a name to a POSIX rule with
+/// its own table and answers `ERR` to a name it does not know.
+pub const TIME_ZONES: [&str; 56] = [
+    "UTC",
+    "Europe/Amsterdam",
+    "Europe/Andorra",
+    "Europe/Athens",
+    "Europe/Belgrade",
+    "Europe/Berlin",
+    "Europe/Bratislava",
+    "Europe/Brussels",
+    "Europe/Bucharest",
+    "Europe/Budapest",
+    "Europe/Chisinau",
+    "Europe/Copenhagen",
+    "Europe/Dublin",
+    "Europe/Gibraltar",
+    "Europe/Guernsey",
+    "Europe/Helsinki",
+    "Europe/IsleofMan",
+    "Europe/Istanbul",
+    "Europe/Jersey",
+    "Europe/Kaliningrad",
+    "Europe/Kiev",
+    "Europe/Lisbon",
+    "Europe/Ljubljana",
+    "Europe/London",
+    "Europe/Luxembourg",
+    "Europe/Madrid",
+    "Europe/Malta",
+    "Europe/Mariehamn",
+    "Europe/Minsk",
+    "Europe/Monaco",
+    "Europe/Moscow",
+    "Europe/Oslo",
+    "Europe/Paris",
+    "Europe/Podgorica",
+    "Europe/Prague",
+    "Europe/Riga",
+    "Europe/Rome",
+    "Europe/Samara",
+    "Europe/SanMarino",
+    "Europe/Sarajevo",
+    "Europe/Simferopol",
+    "Europe/Skopje",
+    "Europe/Sofia",
+    "Europe/Stockholm",
+    "Europe/Tallinn",
+    "Europe/Tirane",
+    "Europe/Uzhgorod",
+    "Europe/Vaduz",
+    "Europe/Vatican",
+    "Europe/Vienna",
+    "Europe/Vilnius",
+    "Europe/Volgograd",
+    "Europe/Warsaw",
+    "Europe/Zagreb",
+    "Europe/Zaporozhye",
+    "Europe/Zurich",
+];
 
 /// Current state of the stove ("Status configuration" register)
 ///
@@ -258,10 +384,14 @@ impl StoveCommands {
 }
 
 /// Error codes returned by the firmware in `ERR;<code>;` answers
-pub fn write_error_message(code: i32) -> &'static str {
+pub fn error_message(code: Option<i32>) -> &'static str {
     match code {
-        17 => "value out of range",
-        19 => "stove did not accept the value (Modbus write failed)",
+        Some(6) => "no data logger record at or after this time",
+        Some(8) => "time zone not known by the module",
+        Some(16) => "module could not read or allocate the data",
+        Some(17) => "value out of range or missing",
+        Some(18) => "module refused the value (invalid or not applied)",
+        Some(19) => "stove did not accept the value (Modbus write failed)",
         _ => "stove returned an error",
     }
 }
