@@ -812,7 +812,7 @@
 
     return {
       el: root,
-      set({ min: newMin, max: newMax, setpoint, currentTemp, pending, isDisabled }) {
+      set({ min: newMin, max: newMax, setpoint, currentTemp, pending, isDisabled, idle }) {
         min = newMin; max = newMax > newMin ? newMax : newMin + 1; disabled = isDisabled;
         if (!dragging || pending) value = setpoint;
         const key = `${min}-${max}`;
@@ -835,6 +835,8 @@
         mark.setAttribute('cx', mx); mark.setAttribute('cy', my);
         mark.style.display = currentTemp === null ? 'none' : '';
         root.style.opacity = isDisabled ? '0.6' : '';
+        // Grey while the stove is off, orange once it is on
+        root.classList.toggle('idle', Boolean(idle));
         draw();
       },
       get value() { return value; },
@@ -980,7 +982,7 @@
       const { min, max } = limits();
       const sp = setpoint.value();
       dial.set({ min, max, setpoint: sp ?? min, currentTemp: ready ? d[`index_ambient_t${ambiance}`] : null,
-        pending: setpoint.pending(), isDisabled: !ready });
+        pending: setpoint.pending(), isDisabled: !ready, idle: ready && !onOff.value() });
       minus.disabled = plus.disabled = !ready;
       rangeEl.textContent = ready ? `${fmtNum(min, 0)} – ${fmtNum(max, 0)} °C` : '';
 
@@ -1003,7 +1005,7 @@
       powerButton.setAttribute('aria-label', t(on ? 'turn_off' : 'turn_on'));
       powerButton.title = t(on ? 'turn_off' : 'turn_on');
       stateTitle.textContent = state.label;
-      stateSub.textContent = state.sub || (ready ? `${t('t_power')} ${d.index_power_level} % · ${fmtAgo(d.last_updated)}` : '');
+      stateSub.textContent = state.sub || '';
       flame.classList.toggle('burning', state.burning);
       phaseBar.hidden = !state.phase;
       [...phaseBar.children].forEach((el, i) => el.classList.toggle('done', i < (state.phase || 0)));
@@ -2497,7 +2499,10 @@
       banner.append(icon('alert'), h('span', { text: bannerText }));
     }
     const inf = store.inf;
-    $('#brand-sub').textContent = received(inf) ? `${inf.hostname} · ${inf.version}` : st?.stove_address || '—';
+    const brand = $('#brand-sub');
+    const age = st?.last_response_at && fresh ? ` · ${fmtDuration(ageSeconds(st.last_response_at))}` : '';
+    brand.textContent = (received(inf) ? `${inf.hostname} · ${inf.version}` : st?.stove_address || '—') + age;
+    brand.title = st?.last_response_at ? `${t('last_response')}${lang === 'fr' ? ' : ' : ': '}${fmtDateTime(parseDate(st.last_response_at), true)}` : '';
     $('#footer-version').textContent = st ? `hottoh_api ${st.version}` : 'hottoh_api';
   }
 
