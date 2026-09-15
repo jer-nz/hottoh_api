@@ -1,6 +1,6 @@
 [package]
 name = "hottoh_api"
-version = "2.2.0"
+version = "2.3.0"
 edition = "2024"
 rust-version = "1.88"
 description = "HTTP API bridge for HottoH pellet stoves (Wifier 2.0 module, local TCP protocol)"

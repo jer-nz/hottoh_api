@@ -71,12 +71,12 @@ logs in `/var/log/hottoh_api/`. The service is not started at installation, and 
 
 ```sh
 # Debian / Ubuntu / Raspberry Pi OS (amd64, arm64)
-sudo dpkg -i hottoh-api_2.2.0_amd64.deb
+sudo dpkg -i hottoh-api_2.3.0_amd64.deb
 sudo editor /etc/hottoh_api/config.ini
 sudo systemctl enable --now hottoh_api
 
 # Alpine (the package is not signed)
-apk add --allow-untrusted hottoh-api_2.2.0_amd64.apk
+apk add --allow-untrusted hottoh-api_2.3.0_amd64.apk
 vi /etc/hottoh_api/config.ini
 rc-update add hottoh_api default && rc-service hottoh_api start
 ```

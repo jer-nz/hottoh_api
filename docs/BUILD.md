@@ -115,8 +115,8 @@ upgrade if it was running, and a modified `config.ini` is kept.
 4. Tag `main` with the version and push the tag:
 
    ```sh
-   git tag v2.2.0
-   git push origin v2.2.0
+   git tag v2.3.0
+   git push origin v2.3.0
    ```
 
 The *Release* workflow then builds the binaries (static Linux amd64 and arm64, Windows, macOS) and
