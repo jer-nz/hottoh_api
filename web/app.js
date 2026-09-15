@@ -253,7 +253,8 @@
     }
   };
 
-  let lang = storage.get('lang', (navigator.language || 'en').toLowerCase().startsWith('fr') ? 'fr' : 'en');
+  // English unless the visitor picked French with the language button
+  let lang = storage.get('lang', 'en');
   if (!I18N[lang]) lang = 'en';
 
   function t(key, vars) {
@@ -2253,8 +2254,10 @@
     $('#footer-version').textContent = st ? `hottoh_api ${st.version}` : 'hottoh_api';
   }
 
-  const THEMES = ['auto', 'light', 'dark'];
-  let theme = storage.get('theme', 'auto');
+  // Dark by default; the button cycles dark, light, then the system setting
+  const THEMES = ['dark', 'light', 'auto'];
+  let theme = storage.get('theme', 'dark');
+  if (!THEMES.includes(theme)) theme = 'dark';
 
   function applyTheme() {
     if (theme === 'auto') document.documentElement.removeAttribute('data-theme');

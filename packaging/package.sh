@@ -26,7 +26,7 @@ trap 'rm -rf "$staging"' EXIT
 mkdir -p "$staging/$name"
 cp "$binary" "$staging/$name/hottoh_api"
 chmod 0755 "$staging/$name/hottoh_api"
-cp README.md CHANGELOG.md LICENSE packaging/config.ini "$staging/$name/"
+cp README.md CHANGELOG.md LICENSE docs/CONFIGURATION.md docs/API.md packaging/config.ini "$staging/$name/"
 cp -r packaging/openrc packaging/systemd "$staging/$name/"
 tar -czf "$out/$name.tar.gz" -C "$staging" "$name"
 

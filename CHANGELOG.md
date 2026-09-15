@@ -5,7 +5,8 @@
 ### New: web interface
 
 A single page embedded in the binary (no file to install, no external resource), served at `/` next
-to the API and Swagger UI. English or French, light or dark theme, usable on a phone.
+to the API and Swagger UI. English by default, or French; dark theme by default, light or following
+the system; usable on a phone.
 
 - Stove: thermostat dial, on/off, eco and chrono modes, power level, fans, temperatures, current
   alarm with what to do.
@@ -47,6 +48,9 @@ opens it in the default browser.
 - `GET /api/status` adds `connected_since`, the start of the current connection.
 - `GET /api/requests`: the last 100 queued requests, newest first.
 - `GET /api/timezone` adds `available`, the time zone names accepted by `POST /api/timezone`.
+- Documentation split: a shorter README with screenshots, and `docs/CONFIGURATION.md`,
+  `docs/API.md` (with a Home Assistant example) and `docs/BUILD.md`. The packages and archives
+  include the configuration and API guides.
 
 ## 2.1.0
 
