@@ -98,7 +98,7 @@ Writes are asynchronous, like the settings above.
 | `GET /api/chrono/schedule` | `chrono_schedule_read` | Weekly schedule (takes about 2 s, see below) |
 | `POST /api/chrono/schedule` | `chrono_schedule_write` | Replaces the schedule of some days |
 | `GET /api/clock` | `clock_read` | Module clock (UTC), stove clock (local), offset from the bridge |
-| `POST /api/clock` | `clock_write` | `{}` (clock of the bridge) or `{"utc": 1757930400}`: sets the module and stove clocks |
+| `POST /api/clock` | `clock_write` | `{}` (clock of the bridge, sent at the start of the next minute) or `{"utc": 1757930400}` (sent at once): sets the module and stove clocks |
 | `GET /api/timezone` | `timezone_read` | `{"zone": "Europe/Paris", "known": true, "available": [...]}` (`available`: names accepted by `POST`) |
 | `POST /api/timezone` | `timezone_write` | `{"zone": "Europe/Paris"}`, a name offered by AppFire; the module then sets the stove clock |
 | `GET /api/datalog/info` | `datalog_read` | Time of the oldest and newest records |
@@ -126,6 +126,11 @@ computer running hottoh_api) swings between about 0 and -60 s even right after a
 one: a stove one minute behind during the first half of a minute is on time. When it is really off,
 send `POST /api/clock {}` (keep the computer running hottoh_api synchronised with NTP); on a stove
 already on time, nothing visible changes.
+
+The stove has no seconds and **starts its minute when it is written**: set at hh:mm:50, it runs
+50 s late. `POST /api/clock {}` therefore answers at once with a `request_id` that stays `pending`
+until the start of the next minute (second 1, up to 60 s), when the clock of the bridge is sent.
+An explicit `utc` is sent at once: send it at the start of a minute.
 
 ### Weekly schedule
 

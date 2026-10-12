@@ -295,6 +295,14 @@ impl SharedState {
         }
     }
 
+    /// Replaces the value shown for a tracked request (known only when it is queued)
+    pub fn update_request_value(&mut self, request_id: u32, value: &str) {
+        if let Some(status) = self.requests.get_mut(&request_id) {
+            status.value = value.to_string();
+            status.updated_at = now();
+        }
+    }
+
     /// Keeps the parameters of the answer to a tracked request
     pub fn set_answer(&mut self, request_id: u32, answer: Vec<String>) {
         if let Some(status) = self.requests.get_mut(&request_id) {
@@ -444,13 +452,44 @@ impl Bridge {
         let request_id = self.next_request_id();
         self.state_mut()
             .track_request(request_id, job.label, &job.shown_value);
+        Self::push_job(&mut queue, request_id, job);
+        Some(request_id)
+    }
+
+    /// Tracks a request (`pending`) that `queue_reserved` will queue later
+    pub fn reserve_request(&self, label: &'static str, shown_value: &str) -> u32 {
+        let request_id = self.next_request_id();
+        self.state_mut()
+            .track_request(request_id, label, shown_value);
+        request_id
+    }
+
+    /// Queues a request reserved by `reserve_request`; ends it as `error` when the queue is full
+    pub fn queue_reserved(&self, request_id: u32, job: Job) -> bool {
+        let mut queue = self.queue();
+        if queue.len() >= MAX_QUEUED {
+            drop(queue);
+            self.state_mut().update_request(
+                request_id,
+                RequestState::Error,
+                None,
+                Some("request queue full".into()),
+            );
+            return false;
+        }
+        self.state_mut()
+            .update_request_value(request_id, &job.shown_value);
+        Self::push_job(&mut queue, request_id, job);
+        true
+    }
+
+    fn push_job(queue: &mut VecDeque<QueuedRequest>, request_id: u32, job: Job) {
         queue.push_back(QueuedRequest {
             request: Request::new(request_id, job.command, job.command_type, job.params),
             attempts: 0,
             queued_at: Instant::now(),
             expects_answer: job.expects_answer,
         });
-        Some(request_id)
     }
 
     pub fn is_running(&self) -> bool {
@@ -527,6 +566,39 @@ mod tests {
         }
         assert!(bridge.queue_write(StoveCommands::PowerLevel, 3).is_none());
         assert_eq!(bridge.queue().len(), MAX_QUEUED);
+    }
+
+    #[test]
+    fn reserved_request_is_pending_until_queued() {
+        let bridge = Bridge::new();
+        let job = || Job {
+            command: Command::Clk,
+            command_type: CommandType::Write,
+            params: vec!["1757930401".into()],
+            label: "Clock",
+            shown_value: "1757930401".into(),
+            expects_answer: true,
+        };
+        let id = bridge.reserve_request("Clock", "next minute");
+        let status = bridge.state().get_request(id).unwrap().clone();
+        assert_eq!(
+            (status.status, status.value.as_str()),
+            (RequestState::Pending, "next minute")
+        );
+        assert!(bridge.queue().is_empty());
+        assert!(bridge.queue_reserved(id, job()));
+        assert_eq!(bridge.queue().len(), 1);
+        assert_eq!(bridge.state().get_request(id).unwrap().value, "1757930401");
+
+        for _ in 1..MAX_QUEUED {
+            bridge.queue_write(StoveCommands::PowerLevel, 3).unwrap();
+        }
+        let late = bridge.reserve_request("Clock", "next minute");
+        assert!(!bridge.queue_reserved(late, job()));
+        assert_eq!(
+            bridge.state().get_request(late).unwrap().status,
+            RequestState::Error
+        );
     }
 
     #[test]
