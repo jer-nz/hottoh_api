@@ -7,6 +7,7 @@ use actix_web::{HttpResponse, web};
 const INDEX_HTML: &str = include_str!("../../web/index.html");
 const APP_CSS: &str = include_str!("../../web/app.css");
 const APP_JS: &str = include_str!("../../web/app.js");
+const ICON_SVG: &str = include_str!("../../web/icon.svg");
 
 /// Scripts and styles come from the page itself only
 const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; script-src 'self'; \
@@ -36,11 +37,16 @@ async fn js() -> HttpResponse {
     asset("text/javascript; charset=utf-8", APP_JS)
 }
 
+async fn icon() -> HttpResponse {
+    asset("image/svg+xml", ICON_SVG)
+}
+
 /// Routes of the web interface
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.route("/", web::get().to(index))
         .route("/ui/app.css", web::get().to(css))
-        .route("/ui/app.js", web::get().to(js));
+        .route("/ui/app.js", web::get().to(js))
+        .route("/ui/icon.svg", web::get().to(icon));
 }
 
 #[cfg(test)]
@@ -57,6 +63,7 @@ mod tests {
             ("/", "text/html", "ui/app.js"),
             ("/ui/app.css", "text/css", ":root"),
             ("/ui/app.js", "text/javascript", "api/status"),
+            ("/ui/icon.svg", "image/svg+xml", "<svg"),
         ] {
             let response =
                 atest::call_service(&app, atest::TestRequest::get().uri(path).to_request()).await;

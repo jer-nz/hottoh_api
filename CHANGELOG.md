@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.3.2
+
+- Icon of the project (`ui/icon.svg`): favicon and logo of the web interface, also used by the
+  Home Assistant integration.
+
 ## 2.3.1
 
 - `POST /api/clock {}` waits for the start of the next minute (second 1, up to 60 s, request
