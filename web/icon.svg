@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bgGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1A1C23" />
+      <stop offset="100%" stop-color="#0F1015" />
+    </linearGradient>
+    <linearGradient id="flameGradient" x1="50%" y1="0%" x2="50%" y2="100%">
+      <stop offset="0%" stop-color="#FFD600" />
+      <stop offset="45%" stop-color="#FF6D00" />
+      <stop offset="100%" stop-color="#DD2C00" />
+    </linearGradient>
+    <linearGradient id="ringGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FF8F00" />
+      <stop offset="100%" stop-color="#BF360C" />
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="12" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+  <rect width="512" height="512" rx="115" fill="url(#bgGradient)" />
+  <circle cx="256" cy="256" r="160" fill="none" stroke="#2A2E3D" stroke-width="16" />
+  <circle cx="256" cy="256" r="160" fill="none" stroke="url(#ringGradient)" stroke-width="16"
+          stroke-dasharray="750" stroke-dashoffset="200" stroke-linecap="round"
+          transform="rotate(-90 256 256)" />
+  <circle cx="256" cy="85" r="6" fill="#FFD600" opacity="0.8" />
+  <circle cx="360" cy="130" r="5" fill="#FF6D00" opacity="0.8" />
+  <circle cx="152" cy="130" r="5" fill="#FF8F00" opacity="0.8" />
+  <g filter="url(#glow)">
+    <path d="M256 120 C 256 120, 340 200, 340 280 C 340 330, 302 370, 256 370 C 210 370, 172 330, 172 280 C 172 200, 256 120, 256 120 Z"
+          fill="url(#flameGradient)" />
+    <path d="M256 180 C 256 180, 298 230, 298 285 C 298 310, 279 330, 256 330 C 233 330, 214 310, 214 285 C 214 230, 256 180, 256 180 Z"
+          fill="#FFF176" opacity="0.9" />
+  </g>
+  <circle cx="256" cy="295" r="14" fill="#1A1C23" stroke="#FFD600" stroke-width="4" />
+</svg>
