@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.3.1
+
+- `POST /api/clock {}` waits for the start of the next minute (second 1, up to 60 s, request
+  `pending`) before sending the clock: the stove has no seconds and starts its minute when it is
+  written, so a write at hh:mm:50 left it 50 s late.
+
 ## 2.3.0
 
 ### Features changed from the interface

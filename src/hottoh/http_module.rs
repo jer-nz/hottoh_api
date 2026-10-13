@@ -412,8 +412,38 @@ pub struct ClockBody {
     utc: Option<u32>,
 }
 
+/// Delay before setting the clock of the bridge, `now` being UTC milliseconds.
+///
+/// The stove clock has no seconds and starts its minute when the clock is written: written at
+/// hh:mm:50, it runs 50 s late. The write is therefore sent at the start of a minute (second 1,
+/// so that a short delay before sending never truncates to the previous minute).
+fn clock_write_delay(now_ms: u64) -> Duration {
+    let second_ms = now_ms % 60_000;
+    if (1_000..CLOCK_WRITE_WINDOW_MS).contains(&second_ms) {
+        Duration::ZERO
+    } else {
+        Duration::from_millis((61_000 - second_ms) % 60_000)
+    }
+}
+
+/// Writes sent within this part of a minute keep the stove clock less than 3 s late
+const CLOCK_WRITE_WINDOW_MS: u64 = 2_000;
+
+fn clock_job(utc: u32) -> Job {
+    Job {
+        command: Command::Clk,
+        command_type: CommandType::Write,
+        params: vec![utc.to_string()],
+        label: "Clock",
+        shown_value: utc.to_string(),
+        expects_answer: true,
+    }
+}
+
 /// Sets the clock of the module, which also sets the stove clock when the stove is connected.
-/// Send `{}` to use the clock of the bridge (keep it synchronised with NTP).
+/// Send `{}` to use the clock of the bridge (keep it synchronised with NTP): the write then waits
+/// for the start of the next minute (up to 60 s, the request stays `pending`), since the stove
+/// clock starts its minute when it is written.
 #[utoipa::path(post, path = "/api/clock", request_body = ClockBody,
     responses((status = 200), (status = 400), (status = 403), (status = 503)), tag = "module")]
 pub async fn post_clock(
@@ -422,22 +452,41 @@ pub async fn post_clock(
     features: Features,
 ) -> Result<HttpResponse, ApiError> {
     require(features.get().clock_write, "clock_write")?;
-    let utc = body.utc.unwrap_or_else(now_utc);
+    let Some(utc) = body.utc else {
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| u64::try_from(d.as_millis()).unwrap_or(0))
+            .unwrap_or(0);
+        let delay = clock_write_delay(now_ms);
+        if delay.is_zero() {
+            let utc = now_utc();
+            let request_id = queue(&bridge, clock_job(utc))?;
+            return Ok(queued_response(request_id, "Clock", &utc.to_string()));
+        }
+        if bridge.queue().len() >= MAX_QUEUED {
+            return Err(ApiError::QueueFull(MAX_QUEUED));
+        }
+        let request_id = bridge.reserve_request("Clock", "next minute");
+        info!(
+            "Clock write {} delayed {} ms, to the start of the next minute",
+            request_id,
+            delay.as_millis()
+        );
+        let bridge = bridge.clone();
+        actix_web::rt::spawn(async move {
+            actix_web::rt::time::sleep(delay).await;
+            bridge.queue_reserved(request_id, clock_job(now_utc()));
+        });
+        return Ok(queued_response(request_id, "Clock", "next minute"));
+    };
     if utc < MIN_UTC {
         return Err(ApiError::InvalidParameter(format!(
             "utc must be in seconds, after 2020-01-01 (got {})",
             utc
         )));
     }
-    queue_command(
-        &bridge,
-        Command::Clk,
-        CommandType::Write,
-        vec![utc.to_string()],
-        "Clock",
-        utc.to_string(),
-        true,
-    )
+    let request_id = queue(&bridge, clock_job(utc))?;
+    Ok(queued_response(request_id, "Clock", &utc.to_string()))
 }
 
 /// Time zone of the module. `known` is false when the firmware has no rule for that name;
@@ -936,6 +985,33 @@ mod tests {
         .await;
         let body: Value = atest::read_body_json(response).await;
         assert_eq!(body["edit_features"], true);
+    }
+
+    #[test]
+    fn clock_write_waits_for_the_start_of_a_minute() {
+        assert_eq!(clock_write_delay(61_000), Duration::ZERO);
+        assert_eq!(clock_write_delay(1_999), Duration::ZERO);
+        assert_eq!(clock_write_delay(2_000), Duration::from_millis(59_000));
+        assert_eq!(clock_write_delay(50_000), Duration::from_millis(11_000));
+        assert_eq!(clock_write_delay(59_900), Duration::from_millis(1_100));
+        assert_eq!(clock_write_delay(120_500), Duration::from_millis(500));
+    }
+
+    #[actix_web::test]
+    async fn clock_of_the_bridge_is_written_at_the_start_of_a_minute() {
+        let bridge = Arc::new(Bridge::new());
+        let (status, response) = post(&bridge, all_enabled(), "/api/clock", json!({})).await;
+        assert_eq!(status, StatusCode::OK, "{}", response);
+        let id = u32::try_from(response["request_id"].as_u64().unwrap()).unwrap();
+        let request = bridge.state().get_request(id).unwrap().clone();
+        assert_eq!(request.status, RequestState::Pending);
+        // queued at once only within the first seconds of a minute
+        let queued = bridge.queue().len();
+        if queued == 0 {
+            assert_eq!(request.value, "next minute");
+        } else {
+            assert_eq!(queued, 1);
+        }
     }
 
     #[actix_web::test]
